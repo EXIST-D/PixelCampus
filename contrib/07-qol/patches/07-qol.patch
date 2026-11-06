@@ -1,0 +1,360 @@
+diff --git a/src/shared/cats.ts b/src/shared/cats.ts
+index 16ea14f..694a47c 100644
+--- a/src/shared/cats.ts
++++ b/src/shared/cats.ts
+@@ -31,8 +31,13 @@ export const CAT_COUNT = 28;
+ /** 猫在家附近游走的半径、玩家够得着的距离（像素） */
+ export const CAT_WANDER = 48;
+ export const CAT_REACH = 28;
+-/** 服务器校验：玩家离猫的"家"不超过游走半径 + 够得着的距离 + 网络/位置延迟余量 */
+-export const CAT_SERVER_REACH = CAT_WANDER + CAT_REACH + 40;
++/**
++ * 服务器校验：玩家离猫的"家"不超过「游走半径 + 够得着的距离 + 余量」。
++ * 猫的位置是各客户端自己算的（服务器只知道家，以及被带着/刚被放走时的位置），
++ * 所以这个半径必须 ≥ CAT_WANDER + CAT_REACH，否则会出现"贴着猫却提示离你太远"。
++ * 客户端也会把猫的活动范围夹在 CAT_WANDER 以内（见 src/entities/Cat.ts 的 homeBound）。
++ */
++export const CAT_SERVER_REACH = CAT_WANDER + CAT_REACH + 60;
+ 
+ export const PET_COOLDOWN_MS = 6000;
+ export const FEED_COOLDOWN_MS = 20000;
+diff --git a/src/shared/party.ts b/src/shared/party.ts
+index 9504372..6266038 100644
+--- a/src/shared/party.ts
++++ b/src/shared/party.ts
+@@ -33,4 +33,4 @@ export type PartyMsg =
+   | { t: 'party_gone'; msg: string }
+   | { t: 'party_result'; ok: boolean; msg: string }
+   /** 坐上/离开队友的车：pid = 我正在坐的那辆车的车主的玩家编号（0 = 没坐车）。客户端据此跟着车主走 */
+-  | { t: 'pax_result'; ok: boolean; pid: number; msg?: string };
++  | { t: 'pax_result'; ok: boolean; pid: number; msg?: string; /** 坐上的是什么车（双人车后座更靠后） */ kind?: 'bike' | 'tandem' };
+diff --git a/src/ui/MonPanel.ts b/src/ui/MonPanel.ts
+index 727a528..4e404f2 100644
+--- a/src/ui/MonPanel.ts
++++ b/src/ui/MonPanel.ts
+@@ -53,7 +53,7 @@ export class MonPanel {
+     (document.getElementById('hud') ?? document.body).append(this.root);
+     ui.add({ id: 'mons', label: '精灵', key: 'R', run: () => this.toggle() });
+     net.handlers.mon = (d) => { this.data = d; ui.badge('mons', d.starter ? 0 : 1); if (this.picked && !this.find(this.picked)) this.picked = null; this.render(); this.onData?.(); };
+-    net.handlers.monResult = (ok, text) => { this.say(text, ok); };
++    net.chain('monResult', (ok, text) => { this.say(text, ok); });
+     this.render();
+   }
+ 
+diff --git a/src/ui/TeleportPanel.ts b/src/ui/TeleportPanel.ts
+index 7861aba..73388ee 100644
+--- a/src/ui/TeleportPanel.ts
++++ b/src/ui/TeleportPanel.ts
+@@ -42,10 +42,10 @@ export class TeleportPanel {
+     window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && this.isOpen) this.close(); });
+     (document.getElementById('hud') ?? document.body).append(this.root);
+     ui.add({ id: 'teleport', label: '传送', key: 'Y', run: () => this.toggle() });
+-    net.handlers.tpResult = (ok, msg) => {
++    net.chain('tpResult', (ok, msg) => {
+       this.say(msg, ok);
+       if (ok) { this.lastGo = Date.now(); this.close(); this.onGone(); }
+-    };
++    });
+   }
+ 
+   get isOpen() { return !this.root.classList.contains('hidden'); }
+diff --git a/src/world/WorldMap.ts b/src/world/WorldMap.ts
+index 78a9236..0b73c49 100644
+--- a/src/world/WorldMap.ts
++++ b/src/world/WorldMap.ts
+@@ -14,6 +14,10 @@ export class WorldMap {
+   }
+   get pxW() { return this.w * TILE; }
+   get pxH() { return this.h * TILE; }
++  /** 重新铺一遍碰撞（室内摆玩家家具时用：先恢复房间原始碰撞，再把家具盖上去） */
++  resetCollision(rows: readonly string[]) { this.blocked.fill(0); rows.forEach((row, y) => { for (let x = 0; x < this.w; x++) this.blocked[y * this.w + x] = row.charCodeAt(x) === 49 ? 1 : 0; }); }
++  setTileBlocked(tx: number, ty: number, on: boolean) { if (!this.inb(tx, ty)) return; this.blocked[ty * this.w + tx] = on ? 1 : 0; }
++  private inb(tx: number, ty: number) { return tx >= 0 && ty >= 0 && tx < this.w && ty < this.h; }
+   tileBlocked(tx: number, ty: number) {
+     if (tx < 0 || ty < 0 || tx >= this.w || ty >= this.h) return true;
+     return this.blocked[ty * this.w + tx] === 1;
+diff --git a/tests/maptp.test.ts b/tests/maptp.test.ts
+new file mode 100644
+index 0000000..bbcbf16
+--- /dev/null
++++ b/tests/maptp.test.ts
+@@ -0,0 +1,66 @@
++import { describe, it, expect, afterEach } from 'vitest';
++import WebSocket from 'ws';
++import { startServer } from '../server/index';
++import { PROTOCOL_VERSION, type ServerMsg } from '../src/shared/protocol';
++import { validateProfile } from '../src/shared/profile';
++
++const W = 100;
++const world = { width: W, height: W, collision: Array.from({ length: W }, () => '0'.repeat(W)), spawn: { x: 20, y: 20 } };
++const open: WebSocket[] = [];
++let srv: Awaited<ReturnType<typeof startServer>> | null = null;
++afterEach(async () => { for (const w of open.splice(0)) w.terminate(); await srv?.close(); srv = null; });
++const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
++
++async function client(port: number, name: string, token: string) {
++  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`); open.push(ws);
++  const msgs: ServerMsg[] = [];
++  ws.on('message', (d, bin) => { if (!bin) msgs.push(JSON.parse(d.toString())); });
++  await new Promise<void>((r, j) => { ws.on('open', () => r()); ws.on('error', j); });
++  const r = validateProfile({ gender: 'f', look: 1, name, college: '机电学院', major: '机械设计', year: 2024 }); if (!r.ok) throw new Error(r.error);
++  ws.send(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, token, profile: r.profile }));
++  for (let i = 0; i < 100 && !msgs.some((m) => m.t === 'welcome'); i++) await sleep(15);
++  const send = (m: unknown) => ws.send(JSON.stringify(m));
++  const wait = async <T extends ServerMsg['t']>(t: T, from = 0, ms = 2500) => {
++    const end = Date.now() + ms;
++    while (Date.now() < end) { const m = msgs.slice(from).find((x) => x.t === t); if (m) return m as Extract<ServerMsg, { t: T }>; await sleep(15); }
++    throw new Error(`等不到 ${t}`);
++  };
++  return { ws, msgs, send, wait };
++}
++type C = Awaited<ReturnType<typeof client>>;
++const GIFT = { mons: { gift: false } };
++let n = 0; const tok = () => `maptp${++n}`.padEnd(24, 'q');
++
++const tp = async (c: C, x: number, y: number) => { const i = c.msgs.length; c.send({ t: 'tp_map', x, y }); return c.wait('tp_result', i); };
++
++describe('地图传送（所有人可用）', () => {
++  it('点地图上一个能站的空点 → 传送成功，并给一句「已传送到 …」', async () => {
++    srv = await startServer({ port: 0, world, game: GIFT });
++    const c = await client(srv.port, '传送甲', tok());
++    const r = await tp(c, 60 * 16, 60 * 16);
++    expect(r.ok).toBe(true);
++    expect(r.msg).toContain('已传送到');
++    // 服务器把人挪过去了：再传一次同一点（15 秒冷却内）应该被拦
++    const again = await tp(c, 70 * 16, 70 * 16);
++    expect(again.ok).toBe(false);
++    expect(again.msg).toContain('冷却');
++  });
++
++  it('落在建筑/水里也没关系：会自动挪到旁边能站的地方', async () => {
++    // 中间挖一块 1 格阻挡，点在正中间
++    const rows = Array.from({ length: W }, (_, y) => Array.from({ length: W }, (_, x) => (x === 50 && y === 50 ? '1' : '0')).join(''));
++    srv = await startServer({ port: 0, world: { ...world, collision: rows }, game: GIFT });
++    const c = await client(srv.port, '传送乙', tok());
++    const r = await tp(c, 50 * 16 + 8, 50 * 16 + 8);
++    expect(r.ok).toBe(true); // 旁边有能站的地方
++  });
++
++  it('地图外、非法坐标 → 拒绝并说明原因', async () => {
++    srv = await startServer({ port: 0, world, game: GIFT });
++    const c = await client(srv.port, '传送丙', tok());
++    expect((await tp(c, -5, 10)).ok).toBe(false);
++    const out = await tp(c, (W + 10) * 16, 10);
++    expect(out.ok).toBe(false);
++    expect(out.msg).toContain('不在地图里');
++  });
++});
+diff --git a/tests/netchain.test.ts b/tests/netchain.test.ts
+new file mode 100644
+index 0000000..0cd9b86
+--- /dev/null
++++ b/tests/netchain.test.ts
+@@ -0,0 +1,28 @@
++import { describe, it, expect } from 'vitest';
++import { NetClient } from '../src/net/client';
++import type { Profile } from '../src/shared/profile';
++
++const mk = () => new NetClient('ws://127.0.0.1:1/ws', 'tok', () => ({ name: 'x' } as Profile));
++
++describe('NetClient.chain：多个面板共用一个服务器回调', () => {
++  it('先后注册都会收到，后注册的不会把前面的顶掉（合成台/背包/彩票都靠 inv）', () => {
++    const net = mk();
++    const got: string[] = [];
++    net.chain('inv', (items) => got.push(`背包:${items.bait ?? 0}`));
++    net.chain('inv', (items) => got.push(`合成台:${items.bait ?? 0}`));
++    net.chain('inv', (items, gain) => got.push(`彩票:${items.lottery ?? 0}/${gain?.length ?? 0}`));
++    net.handlers.inv?.({ bait: 3, lottery: 2 }, [{ id: 'bait', n: 1 }]);
++    expect(got).toEqual(['背包:3', '合成台:3', '彩票:2/1']);
++  });
++
++  it('同一个回调注册多次按顺序执行；没有前一个也能用', () => {
++    const net = mk();
++    const order: number[] = [];
++    net.chain('coins', (n) => order.push(n));
++    net.handlers.coins?.(7);
++    expect(order).toEqual([7]);
++    net.chain('coins', (n) => order.push(n * 2));
++    net.handlers.coins?.(5);
++    expect(order).toEqual([7, 5, 10]);
++  });
++});
+diff --git a/tests/progress.test.ts b/tests/progress.test.ts
+index 1751828..e23de56 100644
+--- a/tests/progress.test.ts
++++ b/tests/progress.test.ts
+@@ -1,5 +1,5 @@
+ import { describe, it, expect } from 'vitest';
+-import { cleanInv, invAdd, invList, invTake, ITEMS } from '../src/shared/items';
++import { cleanInv, invAdd, invList, invTake, ITEMS, itemDef } from '../src/shared/items';
+ import { decodeBackup, encodeBackup } from '../src/shared/backup';
+ import { CAT_COUNT, LEVEL_AT, catLevel, catNext, cleanCats, genCats } from '../src/shared/cats';
+ import { DAILY_FOOD, Progress, dayNo } from '../server/progress';
+@@ -8,13 +8,14 @@ import { validateProfile } from '../src/shared/profile';
+ 
+ describe('背包', () => {
+   it('放入/拿走：受堆叠上限限制，不够就一个也不拿', () => {
++    const stack = itemDef('cat_food')!.stack; // 单格上限（现在是 999，只有同类真的堆满了才放不下）
+     const inv = {};
+     expect(invAdd(inv, 'cat_food', 5)).toBe(5);
+-    expect(invAdd(inv, 'cat_food', 200)).toBe(94); // 上限 99
+-    expect(inv).toEqual({ cat_food: 99 });
+-    expect(invTake(inv, 'cat_food', 100)).toBe(false);
+-    expect(inv).toEqual({ cat_food: 99 });
+-    expect(invTake(inv, 'cat_food', 99)).toBe(true);
++    expect(invAdd(inv, 'cat_food', stack + 100)).toBe(stack - 5); // 只放下剩下的空间
++    expect(inv).toEqual({ cat_food: stack });
++    expect(invTake(inv, 'cat_food', stack + 1)).toBe(false);
++    expect(inv).toEqual({ cat_food: stack });
++    expect(invTake(inv, 'cat_food', stack)).toBe(true);
+     expect(inv).toEqual({}); // 拿空了就从背包里消失
+   });
+   it('关键物品堆叠上限是 1；不认识的物品、非法数量一律拒绝', () => {
+@@ -27,7 +28,7 @@ describe('背包', () => {
+     expect(invTake(inv, 'cat_food', 0)).toBe(false);
+   });
+   it('cleanInv 只保留认识的物品并收敛数量', () => {
+-    expect(cleanInv({ cat_food: 500, cat_treat: -2, ginkgo_leaf: 3.7, bogus: 9, cat_badge: 'x' })).toEqual({ cat_food: 99, ginkgo_leaf: 3 });
++    expect(cleanInv({ cat_food: 5000, cat_treat: -2, ginkgo_leaf: 3.7, bogus: 9, cat_badge: 'x' })).toEqual({ cat_food: itemDef('cat_food')!.stack, ginkgo_leaf: 3 });
+     expect(cleanInv(null)).toEqual({});
+     expect(cleanInv([1, 2])).toEqual({});
+   });
+@@ -433,12 +434,12 @@ describe('钓鱼目录', async () => {
+   const { ICONS } = await import('../tools/art/items');
+   const seeded = (seed: number) => () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
+ 
+-  it('每种鱼都有同名物品和图标；鱼竿/鱼饵/杂物也有；25 种鱼、5 档稀有度', () => {
++  it('每种鱼都有同名物品和图标；鱼竿/鱼饵/杂物也有；真鱼 27 种、5 档稀有度', () => {
+     for (const f of FISH) { expect(itemDef(f.id), f.id).toBeTruthy(); expect(ICONS[f.id], f.id).toBeTruthy(); }
+     for (const id of ['fishing_rod', 'bait']) { expect(itemDef(id), id).toBeTruthy(); expect(ICONS[id], id).toBeTruthy(); }
+-    expect(REAL_FISH.length).toBe(25); expect(isFish('fish_koi')).toBe(true); expect(isFish('junk_boot')).toBe(false); expect(fishDef('nope')).toBeUndefined();
++    expect(REAL_FISH.length).toBe(27); expect(isFish('fish_koi')).toBe(true); expect(isFish('junk_boot')).toBe(false); expect(fishDef('nope')).toBeUndefined();
+     const by = (r: string) => FISH.filter((f) => f.rarity === r).length;
+-    expect([by('common'), by('uncommon'), by('rare'), by('epic'), by('legendary'), by('junk')]).toEqual([6, 6, 6, 4, 3, 4]);
++    expect([by('common'), by('uncommon'), by('rare'), by('epic'), by('legendary'), by('junk')]).toEqual([6, 6, 6, 5, 4, 4]);
+     for (const f of REAL_FISH) { expect(f.minCm! < f.maxCm!, f.id).toBe(true); expect(f.maxKg, f.id).toBeGreaterThan(0); expect(['smooth', 'mixed', 'dart']).toContain(f.move); }
+   });
+   it('抽鱼：尺寸在范围内、杂物没有尺寸、越稀有越少；夜里黑鱼/鲶鱼更多；下雨泥鳅更多；冰湖银鱼王只在冬天', () => {
+diff --git a/tests/rename.test.ts b/tests/rename.test.ts
+new file mode 100644
+index 0000000..f907acc
+--- /dev/null
++++ b/tests/rename.test.ts
+@@ -0,0 +1,56 @@
++import { describe, it, expect, afterEach } from 'vitest';
++import WebSocket from 'ws';
++import { startServer } from '../server/index';
++import { PlayerStore } from '../server/store';
++import { PROTOCOL_VERSION, type ServerMsg } from '../src/shared/protocol';
++import { validateProfile } from '../src/shared/profile';
++
++const W = 60;
++const world = { width: W, height: W, collision: Array.from({ length: W }, () => '0'.repeat(W)), spawn: { x: 20, y: 20 }, pois: [] };
++const open: WebSocket[] = [];
++let srv: Awaited<ReturnType<typeof startServer>> | null = null;
++afterEach(async () => { for (const w of open.splice(0)) w.terminate(); await srv?.close(); srv = null; });
++const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
++
++/**
++ * 改名（学生证 → 修改资料）：只换显示名，不动身份。
++ * 身份是 localStorage 里的 token（服务器存的是它的 sha256）→ 校园号 uid 永远不变；
++ * 背包、校园币、宿舍家具、赌鱼战绩、图鉴都挂在同一个 key 上，所以改名一个都不会丢。
++ */
++describe('改名', () => {
++  it('只换显示名：校园号、背包、校园币、宿舍、战绩、图鉴都还在', async () => {
++    srv = await startServer({ port: 0, world, game: { mons: { gift: false } } });
++    const token = 'renametoken0123456789abc';
++    const ws = new WebSocket(`ws://127.0.0.1:${srv.port}/ws`); open.push(ws);
++    const msgs: ServerMsg[] = [];
++    ws.on('message', (d, bin) => { if (!bin) msgs.push(JSON.parse(d.toString()) as ServerMsg); });
++    await new Promise<void>((r) => ws.on('open', () => r()));
++    const p0 = validateProfile({ name: '原名', gender: 'm', look: 0, college: '机电学院', major: '机械设计', year: 2024 });
++    if (!p0.ok) throw new Error(p0.error);
++    ws.send(JSON.stringify({ t: 'hello', v: PROTOCOL_VERSION, token, profile: p0.profile }));
++    const wait = async <T extends ServerMsg['t']>(t: T, ms = 4000) => {
++      const end = Date.now() + ms;
++      while (Date.now() < end) { const m = msgs.find((x) => x.t === t) as Extract<ServerMsg, { t: T }> | undefined; if (m) return m; await sleep(15); }
++      throw new Error('等不到 ' + t);
++    };
++    const w1 = await wait('welcome');
++    const key = PlayerStore.key(token);
++    // 塞点数据进去：背包、币、宿舍一件家具、赌鱼战绩、图鉴
++    const rec = srv.store.get(key)!;
++    rec.inv = { fish_carp: 3 }; rec.coin = 777; rec.dm = { fr: [{ k: 'poster', x: 3, y: 2, rot: 0 }] } as never;
++    rec.fb = { n: 5, win: 2, got: 300, best: 200 }; rec.fd = { fish_carp: { n: 3, best: 40, kg: 2 } }; srv.store.touch();
++    // 改名
++    const p1 = validateProfile({ name: '新名字', gender: 'm', look: 0, college: '机电学院', major: '机械设计', year: 2024 });
++    if (!p1.ok) throw new Error(p1.error);
++    ws.send(JSON.stringify({ t: 'profile', profile: p1.profile }));
++    await sleep(800);
++    const after = srv.store.get(key)!;
++    expect(after.profile.name).toBe('新名字');
++    expect(after.uid).toBe(w1.uid);
++    expect(after.inv).toEqual({ fish_carp: 3 });
++    expect(after.coin).toBe(777);
++    expect(after.dm?.fr).toEqual([{ k: 'poster', x: 3, y: 2, rot: 0 }]);
++    expect(after.fb).toEqual({ n: 5, win: 2, got: 300, best: 200 });
++    expect(after.fd?.fish_carp?.n).toBe(3);
++  });
++});
+diff --git a/tests/storeprofile.test.ts b/tests/storeprofile.test.ts
+new file mode 100644
+index 0000000..59d4a46
+--- /dev/null
++++ b/tests/storeprofile.test.ts
+@@ -0,0 +1,55 @@
++import { describe, expect, it, afterAll } from 'vitest';
++import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
++import { tmpdir } from 'node:os';
++import { join } from 'node:path';
++import { PlayerStore } from '../server/store';
++import { repairProfile, LOOK_CHOICES } from '../src/shared/profile';
++
++const dir = mkdtempSync(join(tmpdir(), 'ph-store-'));
++afterAll(() => rmSync(dir, { recursive: true, force: true }));
++
++const base = { v: 1, name: '小明', gender: 'm', look: 0, college: '机电工程学院', major: '机械设计制造', year: 2025, motto: '', cardNo: '2025000001' };
++
++describe('坏档案不会把玩家变成新号', () => {
++  it('造型号不合法：换成该性别的第一个造型，其余字段保留', () => {
++    const r = repairProfile({ ...base, look: 99 });
++    expect(r?.profile.look).toBe(LOOK_CHOICES.m[0]);
++    expect(r?.profile.name).toBe('小明');
++    expect(r?.fixed).toContain('造型');
++  });
++
++  it('名字/学院/专业空了：补默认值（至少还能登进去找回背包）', () => {
++    const r = repairProfile({ ...base, name: '   ', college: undefined, major: null });
++    expect(r?.profile.name).toBe('同学');
++    expect(r?.profile.college).toBe('未填写学院');
++    expect(r?.profile.major).toBe('未填写专业');
++    expect(r?.fixed).toEqual(expect.arrayContaining(['姓名', '学院', '专业']));
++  });
++
++  it('性别缺失/错乱：按男生兜底，造型跟着换到男生里有的那个', () => {
++    const r = repairProfile({ ...base, gender: 'x', look: 1 }); // look 1 是女生的
++    expect(r?.profile.gender).toBe('m');
++    expect(LOOK_CHOICES.m).toContain(r!.profile.look);
++  });
++
++  it('完全不是对象才丢掉', () => {
++    expect(repairProfile(null)).toBeUndefined();
++    expect(repairProfile('abc')).toBeUndefined();
++  });
++
++  it('启动时整库载入：坏档案被修好收下，uid/背包都还在', () => {
++    const file = join(dir, 'players.json');
++    writeFileSync(file, JSON.stringify({
++      k_valid: { profile: base, x: 1, y: 2, uid: 1, inv: { bait: 5 } },
++      k_badlook: { profile: { ...base, look: 42 }, x: 3, y: 4, uid: 2, inv: { bait: 7 }, coin: 300 },
++      k_broken: { profile: 'not-an-object', x: 0, y: 0, uid: 3 },
++    }));
++    const store = new PlayerStore(file);
++    expect(store.size).toBe(2);                       // 坏的那条（根本不是对象）被丢掉
++    expect(store.get('k_valid')?.uid).toBe(1);
++    expect(store.get('k_badlook')?.uid).toBe(2);
++    expect(store.get('k_badlook')?.profile.look).toBe(LOOK_CHOICES.m[0]);
++    expect(store.get('k_badlook')?.inv?.bait).toBe(7); // 背包没丢
++    expect(store.get('k_badlook')?.coin).toBe(300);    // 校园币没丢
++  });
++});

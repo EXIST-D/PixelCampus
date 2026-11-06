@@ -1,0 +1,222 @@
+diff --git a/src/shared/titles.ts b/src/shared/titles.ts
+index e31b915..f2fb6b8 100644
+--- a/src/shared/titles.ts
++++ b/src/shared/titles.ts
+@@ -11,8 +11,10 @@ export interface TitleDef {
+   id: string; name: string;
+   /** 管理员手写的专属称号（名字和颜色就编码在 id 里，见 customTitleId） */
+   custom?: boolean;
+-  /** 头顶牌子/学生证上的文字颜色 */
++  /** 头顶牌子/学生证上的文字颜色；rainbow 的称号只用它当兜底色 */
+   color: string;
++  /** 彩虹称号：字是流动的彩色（只给最难拿的那一个） */
++  rainbow?: true;
+   /** 称号面板里"怎么得到"的说明 */
+   how: string;
+   /** 特殊称号：不会写进玩家档案，由服务器按状态临时给（管理员） */
+@@ -20,20 +22,49 @@ export interface TitleDef {
+ }
+ 
+ export const TITLES: readonly TitleDef[] = [
+-  { id: 'freshman', name: '新生', color: '#a6e3b0', how: '走进校园（成就「进入校园」）' },
+-  { id: 'real_hebei', name: '真·河工人', color: '#ffd35a', how: '摸摸南门的校名石，发现真正的校名' },
+-  { id: 'cat_lover', name: '铲屎官', color: '#ffb48a', how: '和一只校园小猫成为「亲密」好友' },
+-  { id: 'cat_guardian', name: '猫咪守护者', color: '#ffc0e0', how: '和一只小猫成为「挚友」' },
+-  { id: 'angler', name: '精工湖钓手', color: '#8fd8ff', how: '在精工湖钓到 5 种不同的鱼' },
+-  { id: 'giant_hunter', name: '巨物猎手', color: '#9fe0c0', how: '钓上来一条「巨物」个头的鱼' },
+-  { id: 'legend_angler', name: '传说钓手', color: '#ffd35a', how: '钓到一条传说级的鱼' },
+-  { id: 'fish_master', name: '钓鱼大师', color: '#8fd8ff', how: '钓鱼图鉴集齐所有种类' },
+-  { id: 'runner', name: '校园跑达人', color: '#ff9d8a', how: '在东区田径场完成一次校园跑' },
+-  { id: 'sprinter', name: '赛场飞人', color: '#ffe066', how: '和好友一起校园跑，并拿到第一名' },
+-  { id: 'diligent', name: '勤勉学子', color: '#d5b8ff', how: '累计 7 天做完当天全部每日任务' },
+-  { id: 'admin', name: '管理员', color: '#ff7a6b', how: '仅管理员', special: true },
++  // —— 入门 ——
++  { id: 'freshman', name: '新生', color: '#9be36f', how: '走进校园（成就「进入校园」）' },
++  { id: 'real_hebei', name: '真·河工人', color: '#ffb45a', how: '摸摸南门的校名石，发现真正的校名' },
++  // —— 钓鱼六级（一级一色：绿 → 青 → 蓝 → 紫 → 橙 → 彩虹）——
++  { id: 'fish_rookie', name: '见习钓手', color: '#3fc98a', how: '钓鱼图鉴集齐 1 种鱼（钓上第一条就有）' },
++  { id: 'angler', name: '精工湖钓手', color: '#3fbfd8', how: '钓鱼图鉴集齐 5 种鱼' },
++  { id: 'fish_ten', name: '湖畔好手', color: '#4f8fe8', how: '钓鱼图鉴集齐 10 种鱼' },
++  { id: 'fish_deep', name: '深水行者', color: '#9b7bff', how: '钓鱼图鉴集齐 18 种鱼' },
++  { id: 'fish_scholar', name: '鱼类学者', color: '#ff9440', how: '钓鱼图鉴集齐 24 种鱼' },
++  { id: 'fish_master', name: '钓鱼大师', color: '#ffd35a', rainbow: true, how: '钓鱼图鉴集齐全部 27 种鱼（全服最难）' },
++  // —— 小猫 / 跑 / 日常 ——
++  { id: 'cat_lover', name: '铲屎官', color: '#b98bff', how: '和一只校园小猫成为「亲密」好友' },
++  { id: 'cat_guardian', name: '猫咪守护者', color: '#ff8fb0', how: '和一只小猫成为「挚友」' },
++  { id: 'giant_hunter', name: '巨物猎手', color: '#6fb3ff', how: '钓上来一条「巨物」个头的鱼' },
++  { id: 'legend_angler', name: '传说钓手', color: '#ffe066', how: '钓到一条传说级的鱼' },
++  { id: 'runner', name: '校园跑达人', color: '#ff6b5a', how: '在东区田径场完成一次校园跑' },
++  { id: 'sprinter', name: '赛场飞人', color: '#d9ff6f', how: '和好友一起校园跑，并拿到第一名' },
++  { id: 'diligent', name: '勤勉学子', color: '#e08bff', how: '累计 7 天做完当天全部每日任务' },
++  { id: 'admin', name: '管理员', color: '#ff3b3b', how: '仅管理员', special: true },
+ ];
+ 
++/**
++ * 钓鱼等级：图鉴种类数到线就给对应称号（由低到高，一级一色，最后一个是彩虹）。
++ * 服务器在「钓到鱼」和「登录」两处都按这张表补发，所以老玩家上线就会拿到该有的那几级。
++ */
++export const FISH_TITLE_LADDER: readonly { id: string; species: number }[] = [
++  { id: 'fish_rookie', species: 1 },
++  { id: 'angler', species: 5 },
++  { id: 'fish_ten', species: 10 },
++  { id: 'fish_deep', species: 18 },
++  { id: 'fish_scholar', species: 24 },
++  { id: 'fish_master', species: 27 },
++];
++
++/** 图鉴里有这么多种鱼 → 应该拥有哪些钓鱼称号（从低到高，含已达成的全部） */
++export function fishTitlesFor(species: number): string[] {
++  const n = Number.isFinite(species) ? species : 0;
++  return FISH_TITLE_LADDER.filter((s) => n >= s.species).map((s) => s.id);
++}
++
++/** 彩虹称号的循环色（头顶牌子用；DOM 那边是 CSS 渐变，见 style.css 的 .ttl-rainbow） */
++export const RAINBOW_COLORS = ['#ff6b6b', '#ffa94d', '#ffe066', '#8ce99a', '#66d9e8', '#8ea1ff', '#e599f7'] as const;
++
+ const BY_ID = new Map(TITLES.map((t) => [t.id, t]));
+ 
+ /**
+diff --git a/src/ui/StudentCard.ts b/src/ui/StudentCard.ts
+index 7316db6..ee963a2 100644
+--- a/src/ui/StudentCard.ts
++++ b/src/ui/StudentCard.ts
+@@ -2,6 +2,7 @@ import type Phaser from 'phaser';
+ import { hueOf, type Profile } from '@/shared/profile';
+ import { drawPortrait } from './sprites';
+ import { titleDef } from '@/shared/titles';
++import { titleText } from './titleText';
+ 
+ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
+   const e = document.createElement(tag);
+@@ -38,8 +39,8 @@ export class StudentCard {
+   /** 称号：显示在抬头下方；没有称号就收起这一行 */
+   setTitle(id?: string) {
+     const t = titleDef(id);
+-    this.ttl.textContent = t ? `「${t.name}」` : '';
+-    this.ttl.style.color = t ? t.color : '';
++    this.ttl.replaceChildren(...(t ? [titleText(`「${t.name}」`, { rainbow: t.rainbow, color: t.color })] : []));
++    this.ttl.classList.toggle('has-rainbow', !!t?.rainbow);   // 彩虹称号：抬头改深底，彩色字才看得清
+     this.ttl.style.display = t ? '' : 'none';
+   }
+ 
+diff --git a/src/ui/TitlePanel.ts b/src/ui/TitlePanel.ts
+index b1d2589..3c4e8dc 100644
+--- a/src/ui/TitlePanel.ts
++++ b/src/ui/TitlePanel.ts
+@@ -1,4 +1,5 @@
+ import { TITLES, titleDef } from '@/shared/titles';
++import { titleText } from './titleText';
+ import type { NetClient } from '@/net/client';
+ 
+ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
+@@ -55,7 +56,10 @@ export class TitlePanel {
+     for (const t of shown) {
+       const got = have(t.id), on = this.sel === t.id;
+       const row = el('div', 'ach-row ttl-row' + (got ? ' done' : '') + (on ? ' ttl-on' : ''));
+-      const tag = el('div', 'ttl-tag', t.custom ? `✦ ${t.name}` : t.name); tag.style.color = got ? t.color : '#8a7a60';
++      const label = t.custom ? `✦ ${t.name}` : t.name;
++      const tag = el('div', 'ttl-tag');
++      // 没拿到的显示成灰的；拿到的用它的颜色，彩虹称号由内层 span 走渐变
++      tag.append(got ? titleText(label, { rainbow: t.rainbow, color: t.color }) : titleText(label, { color: '#8a7a60' }));
+       const mid = el('div', 'ach-mid'); mid.append(el('div', 'ach-desc', t.custom ? '管理员专门授予你的称号' : got ? t.how : `未获得：${t.how}`));
+       row.append(tag, mid);
+       if (on) row.append(el('div', 'ach-time', '佩戴中'));
+diff --git a/src/ui/titleText.ts b/src/ui/titleText.ts
+new file mode 100644
+index 0000000..2bcf2e6
+--- /dev/null
++++ b/src/ui/titleText.ts
+@@ -0,0 +1,20 @@
++/**
++ * 称号文字的统一样式工具。
++ *
++ * 为什么不是直接给容器加 class：学生证的「card-ttl」、称号面板的「ttl-tag」、名人堂的「hall-title」
++ * 自己都带底色（深色小牌子）。彩虹用的是 `background-clip: text`，如果加在容器上，
++ * 被裁成字的会是**容器自己的底色**，牌子就消失了。所以彩虹必须落在一层内层 span 上。
++ */
++const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
++  const e = document.createElement(tag);
++  if (cls) e.className = cls;
++  if (text !== undefined) e.textContent = text;
++  return e;
++};
++
++/** 造一个称号文字节点：彩虹 = 内层 span 走渐变；普通 = 直接用它的颜色 */
++export function titleText(text: string, opt: { rainbow?: boolean; color?: string; cls?: string } = {}): HTMLSpanElement {
++  const span = el('span', [opt.cls ?? '', opt.rainbow ? 'ttl-rainbow' : ''].filter(Boolean).join(' '), text);
++  if (!opt.rainbow && opt.color) span.style.color = opt.color;
++  return span;
++}
+diff --git a/tests/titles.test.ts b/tests/titles.test.ts
+new file mode 100644
+index 0000000..722b5ef
+--- /dev/null
++++ b/tests/titles.test.ts
+@@ -0,0 +1,67 @@
++import { describe, it, expect } from 'vitest';
++import {
++  FISH_TITLE_LADDER, RAINBOW_COLORS, TITLES, fishTitlesFor, titleDef,
++} from '../src/shared/titles';
++import { REAL_FISH } from '../src/shared/fishing';
++import { PlayerStore } from '../server/store';
++import { Progress } from '../server/progress';
++
++const key = PlayerStore.key('title0001234567890abcd');
++
++describe('称号：钓鱼等级与颜色', () => {
++  it('钓鱼六级按图鉴种类解锁（1/5/10/18/24/27）', () => {
++    expect(FISH_TITLE_LADDER.map((s) => s.species)).toEqual([1, 5, 10, 18, 24, 27]);
++    expect(FISH_TITLE_LADDER[FISH_TITLE_LADDER.length - 1].species).toBe(REAL_FISH.length); // 最后一级正好是"集齐"
++    expect(fishTitlesFor(0)).toEqual([]);
++    expect(fishTitlesFor(1)).toEqual(['fish_rookie']);
++    expect(fishTitlesFor(4)).toEqual(['fish_rookie']);
++    expect(fishTitlesFor(5)).toEqual(['fish_rookie', 'angler']);
++    expect(fishTitlesFor(17)).toEqual(['fish_rookie', 'angler', 'fish_ten']);
++    expect(fishTitlesFor(24)).toEqual(['fish_rookie', 'angler', 'fish_ten', 'fish_deep', 'fish_scholar']);
++    expect(fishTitlesFor(27)).toHaveLength(6);
++    expect(fishTitlesFor(99)).toHaveLength(6);   // 超过也不会越界
++    expect(fishTitlesFor(NaN)).toEqual([]);
++  });
++
++  it('六级称号都在目录里，名字不重复，且每级颜色都不一样', () => {
++    const ids = FISH_TITLE_LADDER.map((s) => s.id);
++    const defs = ids.map((id) => titleDef(id)!);
++    expect(defs.every(Boolean)).toBe(true);
++    expect(new Set(defs.map((t) => t.name)).size).toBe(6);
++    expect(new Set(defs.map((t) => t.color)).size).toBe(6);
++    // 一级一色：色相从头到尾都在往前走（绿→青→蓝→紫→橙），最后一级用彩虹
++    expect(defs[5].rainbow).toBe(true);
++    expect(defs.slice(0, 5).every((t) => !t.rainbow)).toBe(true);
++  });
++
++  it('全目录里每个称号的颜色都不同（不会两个称号撞色）', () => {
++    const colors = TITLES.map((t) => t.color.toLowerCase());
++    expect(new Set(colors).size).toBe(colors.length);
++    // 彩虹只给"钓鱼大师"这一个
++    expect(TITLES.filter((t) => t.rainbow).map((t) => t.id)).toEqual(['fish_master']);
++    expect(RAINBOW_COLORS.length).toBeGreaterThanOrEqual(5);
++  });
++
++  it('登录时按图鉴补发：有多少种鱼就发到哪一级，重复调用不会重复发', () => {
++    const store = new PlayerStore(null);
++    const prog = new Progress(store, []);
++    store.set(key, {
++      profile: { v: 1, name: '钓鱼佬', gender: 'm', look: 0, college: '机电学院', major: '机械设计', year: 2024, motto: '', cardNo: '2025000001' } as never,
++      seen: Date.now(), uid: 3,
++    });
++    // 造 10 种鱼的图鉴
++    const fd: Record<string, { n: number; best: number; kg: number }> = {};
++    for (const f of REAL_FISH.slice(0, 10)) fd[f.id] = { n: 1, best: 20, kg: 1 };
++    store.get(key)!.fd = fd;
++
++    expect(prog.species(key)).toBe(10);
++    const got = prog.syncTitles(key, Date.now());
++    expect(got.sort()).toEqual(['angler', 'fish_rookie', 'fish_ten']);
++    expect(Object.keys(prog.titles(key).own).sort()).toEqual(['angler', 'fish_rookie', 'fish_ten']);
++    // 第二次登录不会重复发（返回空）
++    expect(prog.syncTitles(key, Date.now())).toEqual([]);
++    // 又钓到 8 种新的 → 补到"深水行者"
++    for (const f of REAL_FISH.slice(10, 18)) store.get(key)!.fd![f.id] = { n: 1, best: 20, kg: 1 };
++    expect(prog.syncTitles(key, Date.now())).toEqual(['fish_deep']);
++  });
++});

@@ -1,0 +1,37 @@
+{
+ "version": 1,
+ "shapes": [],
+ "objects": [
+  {
+   "k": "farmPlot",
+   "x": 54,
+   "y": 90,
+   "note": "一社区·劳动教育实验田入口",
+   "id": "farm-plot-1"
+  },
+  {
+   "k": "farmPlot",
+   "x": 113.5,
+   "y": 39,
+   "note": "二社区·劳动教育实验田入口",
+   "id": "farm-plot-2"
+  },
+  {
+   "k": "farmPlot",
+   "x": 267,
+   "y": 48,
+   "note": "三社区·劳动教育实验田入口",
+   "id": "farm-plot-3"
+  },
+  {
+   "k": "farmPlot",
+   "x": 300,
+   "y": 120.5,
+   "note": "四社区·劳动教育实验田入口",
+   "id": "farm-plot-4"
+  }
+ ],
+ "rows": [],
+ "erase": [],
+ "buildings": []
+}

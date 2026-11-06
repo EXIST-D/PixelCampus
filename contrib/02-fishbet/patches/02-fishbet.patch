@@ -1,0 +1,743 @@
+diff --git a/data/campus/terrain/10-lake.json b/data/campus/terrain/10-lake.json
+index f437636..1a6a345 100644
+--- a/data/campus/terrain/10-lake.json
++++ b/data/campus/terrain/10-lake.json
+@@ -533,6 +533,34 @@
+      160,
+      121
+     ],
++    [
++     171,
++     121
++    ],
++    [
++     171,
++     127
++    ],
++    [
++     160,
++     127
++    ]
++   ],
++   "density": 5,
++   "note": "湖南岸（西段，留出赌鱼摊的空档）"
++  },
++  {
++   "kind": "cluster",
++   "species": {
++    "willow": 3,
++    "bush": 5,
++    "blossom": 3
++   },
++   "poly": [
++    [
++     181,
++     121
++    ],
+     [
+      208,
+      121
+@@ -542,12 +570,43 @@
+      127
+     ],
+     [
+-     160,
++     181,
+      127
+     ]
+    ],
+    "density": 5,
+-   "note": "湖南岸"
++   "note": "湖南岸（东段）"
++  },
++  {
++   "kind": "at",
++   "prop": "fishStall",
++   "x": 176.0,
++   "y": 125.4,
++   "note": "鱼力全开·赌鱼铺（湖南岸钓鱼人最多的一段，摊子在岸上、把水边那一排让出来）"
++  },
++  {
++   "kind": "label",
++   "text": "鱼力全开 · 赌鱼铺",
++   "x": 176.0,
++   "y": 122.6,
++   "size": 14,
++   "color": "#ffe9a0",
++   "stroke": "#2e1a10",
++   "ds": 70,
++   "note": "摊位招牌（脚点上方约 86px）"
++  },
++  {
++   "kind": "interact",
++   "id": "fishbet",
++   "rect": [
++    173.6,
++    125.7,
++    4.8,
++    1.6
++   ],
++   "hint": "E  押条鱼赌一把：赢了翻倍，输了归铺子",
++   "action": "fishbet",
++   "note": "站在柜台前（摊位南侧）按 E"
+   },
+   {
+    "kind": "cluster",
+diff --git a/src/shared/fishbet.ts b/src/shared/fishbet.ts
+new file mode 100644
+index 0000000..daadd0f
+--- /dev/null
++++ b/src/shared/fishbet.ts
+@@ -0,0 +1,96 @@
++/**
++ * 鱼力全开·赌鱼铺（客户端与服务器共用）——精工湖南岸的摊位，押一条鱼跟三条陪跑鱼比赛。
++ *
++ * 规则：
++ *  - 押注物就是你背包里的**一条鱼**（杂物不能押）。押出去就从背包扣掉：赢了拿币，输了鱼归铺子。
++ *  - 一共 4 条泳道：你的鱼 + 服务器抽的 3 条陪跑鱼（尽量挑同稀有度的，场面才公平）。
++ *  - 每条鱼掷一个"泳速分" = 基础泳速（看稀有度）× 0.88~1.12 的随机，分最高的那条赢。
++ *    所以稀有的鱼**更容易赢**，但赔率更低——押小鱼是搏高倍，押大鱼是求稳。
++ *  - 只有第 1 名有奖：奖金 = 这条鱼的今日收购价 × 赔率，取整。
++ *    各档的期望都压在 0.87 左右（庄家抽 13%），别指望靠这个发财。
++ *
++ * 随机数由服务器提供（这里全是纯函数，方便测试）；客户端的赛跑动画只按服务器给的名次播放。
++ */
++import { FISH, fishDef, type Rarity } from './fishing';
++
++/** 能押的稀有度：杂物（破靴子、水草…）不值钱，不收 */
++export const BET_RARITIES: readonly Rarity[] = ['common', 'uncommon', 'rare', 'epic', 'legendary'];
++
++export const BET = {
++  /** 一局几条泳道（1 条自己的 + 3 条陪跑的） */
++  LANES: 4,
++  /** 两局之间至少隔这么久（服务器判定，防连点刷屏） */
++  COOLDOWN_MS: 6000,
++  /**
++   * 赔率：赢了得「今日收购价 × 赔率」。
++   * 这几个数是按模拟出来的胜率倒推的（陪跑鱼取相邻档，30 万局）：
++   *   常见 13.7% → ×6.4 ｜ 少见 22.7% → ×3.8 ｜ 稀有 24.2% → ×3.6 ｜ 史诗 23.6% → ×3.7 ｜ 传说 39.7% → ×2.2
++   * 各档期望都落在 0.87 左右（庄家抽 13%）。改赔率或改泳速，记得重跑 tests/fishbet.test.ts 里的期望检查。
++   */
++  ODDS: { common: 6.4, uncommon: 3.8, rare: 3.6, epic: 3.7, legendary: 2.2 } as Record<Rarity, number>,
++  /** 基础泳速：稀有的鱼天生快一点（陪跑鱼是全池随机抽的，所以押贵的鱼确实更容易赢） */
++  SPEED: { common: 1, uncommon: 1.06, rare: 1.12, epic: 1.18, legendary: 1.26 } as Record<Rarity, number>,
++  /** 一条鱼泳速的随机范围（上下浮动） */
++  JITTER: 0.12,
++  /** 单笔奖金达到这个数就上公屏（不写死数值，按鱼的档次算） */
++  BROADCAST_PRIZE: 800,
++} as const;
++
++/** 今天这条鱼押中能赢多少（不含大小月行情以外的东西：和卖价同一套算法） */
++export function betPrize(price: number, rarity: Rarity): number {
++  if (!BET_RARITIES.includes(rarity)) return 0;
++  return Math.max(1, Math.round(price * (BET.ODDS[rarity] ?? 1)));
++}
++
++/** 这条鱼能不能押（背包里有、且不是杂物） */
++export function canBet(id: string): boolean {
++  const d = fishDef(id);
++  return !!d && BET_RARITIES.includes(d.rarity);
++}
++
++/** 能押的鱼（按稀有度从低到高、再按名字排；面板里直接照这个顺序列） */
++export function bettableFish(): { id: string; name: string; rarity: Rarity }[] {
++  return FISH.filter((f) => BET_RARITIES.includes(f.rarity)).map((f) => ({ id: f.id, name: f.name, rarity: f.rarity }));
++}
++
++export interface RaceEntry { id: string; rarity: Rarity }
++
++/**
++ * 赛跑判定（纯函数）：按每条鱼掷一个泳速分，返回从第 1 名到最后的 id 顺序。
++ * rnd 必须是服务器那边的随机源；客户端不要用它，只用服务器给的结果。
++ */
++export function raceOrder(entries: readonly RaceEntry[], rnd: () => number): string[] {
++  const scored = entries.map((e, i) => {
++    const base = BET.SPEED[e.rarity] ?? 1;
++    const j = 1 - BET.JITTER + rnd() * BET.JITTER * 2; // 0.88 ~ 1.12
++    // 同一分时按原始顺序（稳定排序的兜底，虽然概率极低）
++    return { id: e.id, score: base * j, i };
++  });
++  scored.sort((a, b) => b.score - a.score || a.i - b.i);
++  return scored.map((s) => s.id);
++}
++
++/**
++ * 抽 3 条陪跑鱼：从**你这条鱼上下各一档**里随机抓（不抽自己）。
++ * 押传说鱼 → 陪跑的至少是史诗，赢面大；押常见鱼 → 陪跑的是常见/少见，赢面小但赔率高。
++ * 只取相邻档是刻意的：要是全池随机，押常见鱼几乎必输（一池子传说鱼压着你），玩起来就没意思了。
++ */
++export function pickRivals(betId: string, betRarity: Rarity, rnd: () => number): { id: string; rarity: Rarity }[] {
++  const at = BET_RARITIES.indexOf(betRarity);
++  const lo = Math.max(0, at - 1), hi = Math.min(BET_RARITIES.length - 1, at + 1);
++  const band = BET_RARITIES.slice(lo, hi + 1);
++  const pool = FISH.filter((f) => band.includes(f.rarity) && f.id !== betId);
++  const out: { id: string; rarity: Rarity }[] = [];
++  while (out.length < BET.LANES - 1 && pool.length) {
++    const i = Math.min(pool.length - 1, Math.floor(rnd() * pool.length));
++    const [pick] = pool.splice(i, 1);
++    out.push({ id: pick.id, rarity: pick.rarity });
++  }
++  return out;
++}
++
++/** 赔率文本（面板里显示成「×3.8」） */
++export const oddsText = (rarity: Rarity): string => `×${(BET.ODDS[rarity] ?? 0).toFixed(1)}`;
++
++/** 稀有度的中文（面板里标在鱼名后面） */
++export const RARITY_CN: Record<Rarity, string> = { common: '常见', uncommon: '少见', rare: '稀有', epic: '史诗', legendary: '传说', junk: '杂物' };
+diff --git a/src/ui/FishBetUi.ts b/src/ui/FishBetUi.ts
+new file mode 100644
+index 0000000..136eb6c
+--- /dev/null
++++ b/src/ui/FishBetUi.ts
+@@ -0,0 +1,197 @@
++import { BET, RARITY_CN, betPrize, canBet, oddsText } from '@/shared/fishbet';
++import { FISH, fishDef } from '@/shared/fishing';
++import { sellPrice } from '@/shared/economy';
++import type { NetClient } from '@/net/client';
++
++const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
++  const e = document.createElement(tag);
++  if (cls) e.className = cls;
++  if (text !== undefined) e.textContent = text;
++  return e;
++};
++
++/** 一局比赛的一条泳道（服务器按名次给过来的） */
++interface Lane { id: string; name: string; rarity: string; mine: boolean; price: number }
++
++/**
++ * 鱼力全开·赌鱼铺（精工湖南岸的摊位）。
++ * 押注和开赛都在服务器：这里只负责“把背包里的鱼列出来、把名次播成一段赛跑”。
++ * 动画不是随机的——终点名次严格按服务器给的顺序，所以不会出现“动画第一、结算第三”。
++ */
++export class FishBetUi {
++  private root = el('div', 'screen hidden');
++  private body = el('div', 'bet-body');
++  private msg = el('div', 'board-msg');
++  private head = el('div', 'bet-title');
++  private listBox = el('div', 'bet-list');
++  private trackBox = el('div', 'bet-track-box');
++  private inv: Record<string, number> = {};
++  /** 名次顺序的泳道（跑到一半时用来画） */
++  private lanes: Lane[] = [];
++  private prize = 0;
++  private busy = false;
++  /** 冷却到什么时候（毫秒时间戳） */
++  private until = 0;
++  private timer = 0;
++  private raf = 0;
++
++  constructor(private net: NetClient) {
++    const panel = el('div', 'box bet');
++    const head = el('div', 'board-head');
++    const close = el('button', 'btn', '✕'); close.type = 'button'; close.setAttribute('aria-label', '离开赌鱼铺');
++    close.addEventListener('click', () => this.close());
++    head.append(el('div', 'board-title', '🐟 鱼力全开'), close);
++    const sub = el('div', 'create-sub', `押一条鱼，跟三条陪跑鱼比一场。赢了得「今日收购价 × ${oddsText('rare')} 左右」的币，输了这条鱼就归铺子了。`);
++    panel.append(head, sub, this.head, this.msg, this.trackBox, this.listBox);
++    this.root.append(panel);
++    this.root.addEventListener('mousedown', (e) => { if (e.target === this.root) this.close(); });
++    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && this.isOpen) this.close(); });
++    (document.getElementById('hud') ?? document.body).append(this.root);
++
++    // 故意不放进 ☰ 菜单：这是个"走到湖边才玩得了"的摊位，只从摊子前按 E 打开（服务器也会校验位置）
++
++    // 背包变了就重画鱼单（chain：不能顶掉背包/商店已经挂好的回调）
++    net.chain('inv', (items) => { this.inv = items; this.renderList(); });
++    net.chain('fishBetResult', (m) => this.onResult(m));
++  }
++
++  get isOpen() { return !this.root.classList.contains('hidden'); }
++  open() {
++    this.root.classList.remove('hidden');
++    this.msg.textContent = '挑一条鱼押上去（只有背包里的鱼能押）';
++    this.msg.className = 'board-msg';
++    this.net.getInv();
++    this.renderList();
++    // 切场景重开时可能残留上一局的动画
++    if (!this.busy) this.trackBox.replaceChildren();
++  }
++  close() {
++    this.root.classList.add('hidden');
++    this.stopAnim();
++  }
++  toggle() { if (this.isOpen) this.close(); else this.open(); }
++
++  /** 现在能不能押（服务器还会再判一次，这里只是别让玩家白点） */
++  private get cooling() { return Date.now() < this.until; }
++
++  private renderList() {
++    this.listBox.replaceChildren();
++    const rows = FISH.filter((f) => canBet(f.id) && (this.inv[f.id] ?? 0) > 0).map((f) => ({ f, n: this.inv[f.id] }));
++    if (!rows.length) {
++      this.listBox.append(el('div', 'bet-empty', '背包里还没有能押的鱼：先去湖里钓几条（杂物不收）。'));
++      return;
++    }
++    // 稀有度高的排前面：那才是玩家想押的
++    rows.sort((a, b) => (BET.ODDS[b.f.rarity] ?? 0) - (BET.ODDS[a.f.rarity] ?? 0));
++    for (const { f, n } of rows) {
++      const price = sellPrice(f.id, this.today());
++      const prize = betPrize(price, f.rarity);
++      const row = el('div', 'bet-row');
++      const info = el('div', 'bet-info');
++      const name = el('div', 'bet-name');
++      name.append(el('span', `bet-rar r-${f.rarity}`, RARITY_CN[f.rarity]), document.createTextNode(` ${f.name} ×${n}`));
++      info.append(name, el('div', 'bet-note', `今日收购价 ${price} · 赔率 ${oddsText(f.rarity)} · 赢了得 ${prize} 币`));
++      const go = el('button', 'btn' + (this.cooling || this.busy ? '' : ' primary'), '押这条');
++      go.type = 'button';
++      go.disabled = this.cooling || this.busy;
++      go.addEventListener('click', () => {
++        this.busy = true; this.prize = 0;
++        this.renderList();
++        this.msg.className = 'board-msg';
++        this.msg.textContent = '下注了：等老板把鱼倒进池子…';
++        this.net.fishBet(f.id);
++      });
++      row.append(info, go);
++      this.listBox.append(row);
++    }
++    if (this.cooling) this.listBox.append(el('div', 'bet-empty', `老板还在收拾鱼盆：${Math.ceil((this.until - Date.now()) / 1000)} 秒`));
++  }
++
++  /** 今日行情（和商店同一套算法：按日期编号 + 物种） */
++  private today() { return Math.floor((Date.now() + 8 * 3600e3) / 86400e3); }
++
++  private onResult(m: { ok: boolean; msg: string; lanes: Lane[]; rank: number; prize: number; wait: number }) {
++    this.msg.className = 'board-msg' + (m.ok && m.prize > 0 ? '' : ' bad');
++    this.msg.textContent = m.msg;
++    if (!m.ok) {
++      this.busy = false;
++      if (m.wait > 0) { this.until = Date.now() + m.wait; this.tickCool(); }
++      this.renderList();
++      return;
++    }
++    this.until = Date.now() + m.wait;
++    this.lanes = m.lanes;
++    this.prize = m.prize;
++    this.startAnim();
++    this.tickCool();
++  }
++
++  /** 冷却是按秒显示的，这里每 400ms 刷一次按钮状态 */
++  private tickCool() {
++    clearInterval(this.timer);
++    this.timer = window.setInterval(() => {
++      if (!this.isOpen) { clearInterval(this.timer); return; }
++      if (!this.cooling && !this.busy) { clearInterval(this.timer); this.renderList(); return; }
++      this.renderList();
++    }, 400) as unknown as number;
++  }
++
++  private stopAnim() {
++    if (this.raf) cancelAnimationFrame(this.raf);
++    this.raf = 0;
++    this.busy = false;
++  }
++
++  /**
++   * 赛跑动画：4 条泳道，按服务器给的名次倒排终点时间（第 1 名先到）。
++   * 每条泳道叠一点正弦起伏，看起来像在真游；但最后一个像素一定落在服务器给的名次上。
++   */
++  private startAnim() {
++    this.stopAnim();
++    const wrap = el('div', 'bet-race');
++    const DUR = 2600, GAP = 420;   // 第一名 2.6 秒到，之后每个名次晚 0.42 秒
++    const markers: { box: HTMLElement; fish: HTMLElement; finish: number; phase: number }[] = [];
++    this.lanes.forEach((lane, i) => {
++      const row = el('div', 'bet-lane' + (lane.mine ? ' mine' : ''));
++      const tag = el('span', `bet-rar r-${lane.rarity}`, RARITY_CN[lane.rarity as keyof typeof RARITY_CN] ?? '');
++      const name = el('span', 'bet-lane-name', `${lane.name}${lane.mine ? '（你押的）' : ''}`);
++      const track = el('div', 'bet-lane-track');
++      const fish = el('i', 'bet-fish');
++      const rank = el('span', 'bet-rank', '');
++      track.append(fish);
++      row.append(rank, name, tag, track);
++      wrap.append(row);
++      markers.push({ box: rank, fish, finish: DUR + i * GAP, phase: i * 1.7 });
++    });
++    this.trackBox.replaceChildren(wrap);
++    const t0 = performance.now();
++    const step = () => {
++      const t = performance.now() - t0;
++      let done = 0;
++      markers.forEach((mk, i) => {
++        const u = Math.min(1, t / mk.finish);
++        // 前 88% 用它自己的速度推进，最后一段收口，保证刚好卡在终点
++        const base = u < 0.88 ? (u / 0.88) * 0.9 : 0.9 + (u - 0.88) / 0.12 * 0.1;
++        const wob = u >= 1 ? 0 : Math.sin(t / 130 + mk.phase) * 0.035 * (1 - u);
++        const p = Math.max(0, Math.min(1, base + wob));
++        // 别用裸的 100%：鱼标记本身有宽度，贴到 100% 就被 track 的 overflow 裁掉了（看起来像"鱼不见了"）
++        mk.fish.style.left = `calc(${p * 100}% - ${p * 13}px)`;
++        if (u >= 1) { done++; mk.box.textContent = `${i + 1}`; mk.box.classList.add('on'); }
++      });
++      if (done < markers.length && this.isOpen) this.raf = requestAnimationFrame(step);
++      else {
++        this.raf = 0;
++        this.busy = false;
++        this.finishAnim();
++      }
++    };
++    this.raf = requestAnimationFrame(step);
++  }
++
++  private finishAnim() {
++    const won = this.prize > 0;
++    const line = el('div', 'bet-result' + (won ? ' win' : ''), won ? `🏆 赢了 ${this.prize} 校园币` : '这条鱼归铺子了');
++    this.trackBox.append(line);
++    this.renderList();
++  }
++}
+diff --git a/tests/fishbet.test.ts b/tests/fishbet.test.ts
+new file mode 100644
+index 0000000..d9b7251
+--- /dev/null
++++ b/tests/fishbet.test.ts
+@@ -0,0 +1,93 @@
++import { describe, it, expect } from 'vitest';
++import { FISH } from '../src/shared/fishing';
++import { BET, BET_RARITIES, betPrize, bettableFish, canBet, oddsText, pickRivals, raceOrder, RARITY_CN } from '../src/shared/fishbet';
++
++/** 固定种子的线性同余随机（测试要可复现） */
++const rngOf = (seed: number) => () => { seed = (seed * 1664525 + 1013904223) >>> 0; return seed / 4294967296; };
++
++describe('赌鱼规则', () => {
++  it('杂物不能押，正常鱼都能押', () => {
++    expect(canBet('fish_crucian')).toBe(true);
++    expect(canBet('boot')).toBe(false);        // 破靴子（杂物）
++    expect(canBet('不存在的鱼')).toBe(false);
++    expect(bettableFish().length).toBe(FISH.filter((f) => BET_RARITIES.includes(f.rarity)).length);
++    expect(bettableFish().every((f) => canBet(f.id))).toBe(true);
++  });
++
++  it('奖金 = 今日收购价 × 赔率，取整且至少 1', () => {
++    expect(betPrize(45, 'rare')).toBe(Math.round(45 * BET.ODDS.rare));
++    expect(betPrize(6, 'common')).toBe(Math.round(6 * BET.ODDS.common));
++    expect(betPrize(0, 'rare')).toBe(1);
++    expect(betPrize(100, 'junk')).toBe(0);      // 杂物没赔率
++    expect(oddsText('legendary')).toBe('×2.2');
++    expect(RARITY_CN.epic).toBe('史诗');
++  });
++
++  it('赛跑：4 条泳道、名次不重复、不丢鱼，分数高的在前', () => {
++    const rnd = rngOf(7);
++    const lanes = [
++      { id: 'fish_crucian', rarity: 'common' as const },
++      { id: 'fish_carp', rarity: 'common' as const },
++      { id: 'fish_bream', rarity: 'uncommon' as const },
++      { id: 'fish_goldfish', rarity: 'rare' as const },
++    ];
++    const order = raceOrder(lanes, rnd);
++    expect(order).toHaveLength(4);
++    expect(new Set(order).size).toBe(4);
++    expect([...order].sort()).toEqual([...lanes.map((l) => l.id)].sort());
++    // 同样的种子必须给同样的结果（服务器结算、回放都靠这个）
++    expect(raceOrder(lanes, rngOf(7))).toEqual(order);
++  });
++
++  it('陪跑鱼：3 条、不重复、不含自己、只在上下各一档里挑', () => {
++    const rnd = rngOf(11);
++    for (const r of BET_RARITIES) {
++      const mine = FISH.find((f) => f.rarity === r)!;
++      const at = BET_RARITIES.indexOf(r);
++      const band = new Set(BET_RARITIES.slice(Math.max(0, at - 1), Math.min(BET_RARITIES.length, at + 2)));
++      for (let i = 0; i < 50; i++) {
++        const rivals = pickRivals(mine.id, r, rnd);
++        expect(rivals).toHaveLength(BET.LANES - 1);
++        expect(new Set(rivals.map((x) => x.id)).size).toBe(rivals.length);
++        expect(rivals.some((x) => x.id === mine.id)).toBe(false);
++        expect(rivals.every((x) => band.has(x.rarity))).toBe(true);
++      }
++    }
++  });
++
++  /**
++   * 这张表是"庄家优势"的护栏：任何一档的期望都不能 ≥ 1（不然玩家只押那一档就能无限刷币），
++   * 也不能低于 0.7（太黑心，玩家玩两把就不来了）。
++   */
++  it('各档期望值都在 0.70 ~ 1.00 之间（庄家优势 0~30%）', () => {
++    const rnd = rngOf(20261106);
++    const N = 60000;
++    for (const r of BET_RARITIES) {
++      const mine = FISH.find((f) => f.rarity === r)!;
++      let win = 0;
++      for (let i = 0; i < N; i++) {
++        const lanes = [{ id: mine.id, rarity: r }, ...pickRivals(mine.id, r, rnd)];
++        if (raceOrder(lanes, rnd)[0] === mine.id) win++;
++      }
++      const p = win / N, ev = p * BET.ODDS[r];
++      expect(ev, `${r} 期望 ${ev.toFixed(3)}`).toBeGreaterThan(0.7);
++      expect(ev, `${r} 期望 ${ev.toFixed(3)}`).toBeLessThan(1);
++    }
++  });
++
++  it('越贵的鱼赢面越大（陪跑鱼在相邻档，档位越高相对越强）', () => {
++    const rnd = rngOf(99);
++    const N = 40000;
++    const winRate = (r: (typeof BET_RARITIES)[number]) => {
++      const mine = FISH.find((f) => f.rarity === r)!;
++      let w = 0;
++      for (let i = 0; i < N; i++) {
++        const lanes = [{ id: mine.id, rarity: r }, ...pickRivals(mine.id, r, rnd)];
++        if (raceOrder(lanes, rnd)[0] === mine.id) w++;
++      }
++      return w / N;
++    };
++    // 常见鱼要和少见鱼赛、传说鱼只和史诗/传说赛 —— 后者赢面明显更高
++    expect(winRate('legendary')).toBeGreaterThan(winRate('common') * 1.5);
++  });
++});
+diff --git a/tests/fishbetserver.test.ts b/tests/fishbetserver.test.ts
+new file mode 100644
+index 0000000..0da9a62
+--- /dev/null
++++ b/tests/fishbetserver.test.ts
+@@ -0,0 +1,172 @@
++import { describe, it, expect, afterEach } from 'vitest';
++import WebSocket from 'ws';
++import { startServer } from '../server/index';
++import { PlayerStore } from '../server/store';
++import { PROTOCOL_VERSION, type ServerMsg } from '../src/shared/protocol';
++import { validateProfile } from '../src/shared/profile';
++import { BET, betPrize } from '../src/shared/fishbet';
++import { sellPrice } from '../src/shared/economy';
++import { dayNo } from '../server/progress';
++import { mkdtempSync, rmSync } from 'node:fs';
++import { join } from 'node:path';
++import { tmpdir } from 'node:os';
++
++const W = 200;
++/** 赌鱼摊的互动区（像素坐标）：摊位在 (100, 100) 格，玩家出生点正好站在前面 */
++const SPOT = { x: 96 * 16, y: 100 * 16, w: 8 * 16, h: 3 * 16 };
++const world = {
++  width: W, height: W,
++  collision: Array.from({ length: W }, () => '0'.repeat(W)),
++  spawn: { x: 100, y: 101 }, pois: [], spots: { fishbet: SPOT },
++};
++const open: WebSocket[] = [];
++let srv: Awaited<ReturnType<typeof startServer>> | null = null;
++afterEach(async () => { for (const w of open.splice(0)) w.terminate(); await srv?.close(); srv = null; });
++const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
++const tok = (k: string) => `bettoken${k}`.padEnd(24, k);
++const profile = (name: string) => ({ name, gender: 'f' as const, look: 1, college: '机电学院', major: '机械设计', year: 2024 });
++
++async function client(port: number, name: string, token: string) {
++  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`); open.push(ws);
++  const msgs: ServerMsg[] = [];
++  ws.on('message', (d, bin) => { if (!bin) msgs.push(JSON.parse(d.toString()) as ServerMsg); });
++  await new Promise<void>((r, j) => { ws.on('open', () => r()); ws.on('error', j); });
++  const send = (m: unknown) => ws.send(JSON.stringify(m));
++  const wait = async <T extends ServerMsg['t']>(t: T, from = 0, ms = 4000) => {
++    const end = Date.now() + ms;
++    while (Date.now() < end) {
++      const m = msgs.slice(from).find((x): x is Extract<ServerMsg, { t: T }> => x.t === t);
++      if (m) return m;
++      await sleep(15);
++    }
++    throw new Error(`等不到 ${t}`);
++  };
++  const r = validateProfile(profile(name)); if (!r.ok) throw new Error(r.error);
++  send({ t: 'hello', v: PROTOCOL_VERSION, token, profile: r.profile });
++  await wait('welcome');
++  return { ws, send, msgs, wait };
++}
++
++describe('赌鱼铺（服务器结算）', () => {
++  it('押一条鱼：扣鱼、给 4 条泳道、名次 1~4；只有第一名才有奖', async () => {
++    srv = await startServer({ port: 0, world, game: { mons: { gift: false } } });
++    const a = await client(srv.port, '赌鱼佬', tok('A'));
++    const key = PlayerStore.key(tok('A'));
++    srv.store.get(key)!.inv = { fish_crucian: 3 };
++    srv.store.touch();
++
++    let n = a.msgs.length;
++    a.send({ t: 'fishbet', id: 'fish_crucian' });
++    const r = await a.wait('fishbet_result', n);
++    expect(r.ok).toBe(true);
++    expect(r.lanes).toHaveLength(BET.LANES);
++    expect(r.lanes.filter((l) => l.mine)).toHaveLength(1);
++    expect(r.lanes[0].mine || r.lanes[1].mine || r.lanes[2].mine || r.lanes[3].mine).toBe(true);
++    expect(r.rank).toBeGreaterThanOrEqual(1);
++    expect(r.rank).toBeLessThanOrEqual(4);
++    expect(r.lanes[r.rank - 1].mine).toBe(true);              // 名次和泳道顺序要对得上
++    expect(new Set(r.lanes.map((l) => l.id)).size).toBe(BET.LANES); // 不重复
++    // 押的那条鱼被扣掉了一条
++    expect(srv.store.get(key)!.inv?.fish_crucian).toBe(2);
++    // 第一名才有奖，奖金额 = 今日收购价 × 赔率
++    const price = sellPrice('fish_crucian', dayNo(Date.now()));
++    expect(r.prize).toBe(r.rank === 1 ? betPrize(price, 'common') : 0);
++    if (r.prize > 0) expect(srv.store.get(key)!.coin).toBe(r.prize);
++    // 战绩落库（名人堂赌鱼榜的数据来源）
++    expect(srv.store.get(key)!.fb).toEqual({ n: 1, win: r.rank === 1 ? 1 : 0, got: r.prize, best: r.prize });
++  });
++
++  it('背包里没有这条鱼就被拒；杂物也不能押', async () => {
++    srv = await startServer({ port: 0, world, game: { mons: { gift: false } } });
++    const a = await client(srv.port, '空手', tok('B'));
++    const key = PlayerStore.key(tok('B'));
++    srv.store.get(key)!.inv = { boot: 2 };
++    srv.store.touch();
++
++    let n = a.msgs.length;
++    a.send({ t: 'fishbet', id: 'fish_carp' });
++    const r1 = await a.wait('fishbet_result', n);
++    expect(r1.ok).toBe(false);
++    expect(r1.msg).toContain('没有');
++
++    n = a.msgs.length;
++    a.send({ t: 'fishbet', id: 'boot' });
++    const r2 = await a.wait('fishbet_result', n);
++    expect(r2.ok).toBe(false);
++    expect(r2.msg).toContain('杂物');
++    expect(srv.store.get(key)!.inv?.boot).toBe(2);            // 没被扣
++  });
++
++  it('冷却：连着押第二把会被拦下，并告诉你还要等多久', async () => {
++    srv = await startServer({ port: 0, world, game: { mons: { gift: false } } });
++    const a = await client(srv.port, '连点党', tok('C'));
++    const key = PlayerStore.key(tok('C'));
++    srv.store.get(key)!.inv = { fish_crucian: 5 };
++    srv.store.touch();
++
++    let n = a.msgs.length;
++    a.send({ t: 'fishbet', id: 'fish_crucian' });
++    expect((await a.wait('fishbet_result', n)).ok).toBe(true);
++    n = a.msgs.length;
++    a.send({ t: 'fishbet', id: 'fish_crucian' });
++    const r = await a.wait('fishbet_result', n);
++    expect(r.ok).toBe(false);
++    expect(r.wait).toBeGreaterThan(0);
++    expect(r.wait).toBeLessThanOrEqual(BET.COOLDOWN_MS);
++    expect(srv.store.get(key)!.inv?.fish_crucian).toBe(4);    // 第二把没扣鱼
++  });
++
++  it('名人堂赌鱼榜：按累计赢到的币排、平手看场次；名次和"我"的数据都对得上', async () => {
++    srv = await startServer({ port: 0, world, game: { mons: { gift: false } } });
++    // 造三个有战绩的号：A 赢 900（12 场 3 胜）、B 赢 900（20 场 4 胜）、C 赢 300
++    const seed = (k: string, i: number, fb: { n: number; win: number; got: number; best: number }) => {
++      const key = PlayerStore.key(tok(k));
++      srv!.store.set(key, { profile: profile(`赌${i}`) as never, seen: Date.now(), uid: srv!.store.ensureUid(key), fb });
++    };
++    seed('E0', 0, { n: 12, win: 3, got: 900, best: 400 });
++    seed('E1', 1, { n: 20, win: 4, got: 900, best: 300 });
++    seed('E2', 2, { n: 5, win: 1, got: 300, best: 300 });
++    const a = await client(srv.port, '赌2', tok('E2'));
++    const n = a.msgs.length;
++    a.send({ t: 'hall_get' });
++    const h = await a.wait('hall', n);
++    expect(h.bet.map((r) => r.name)).toEqual(['赌1', '赌0', '赌2']);    // 同为 900 时押得多的排前面
++    expect(h.bet.map((r) => r.value)).toEqual([900, 900, 300]);
++    expect(h.bet[0]).toMatchObject({ value: 900, extra: 20, win: 4 });
++    expect(h.me.bet).toEqual({ value: 300, extra: 5, win: 1, rank: 3 });
++    expect(h.total.bet).toBe(3);
++    // 没玩过的号：不在榜上、rank 0
++    const b = await client(srv.port, '路人', tok('E9'));
++    const n2 = b.msgs.length;
++    b.send({ t: 'hall_get' });
++    const h2 = await b.wait('hall', n2);
++    expect(h2.me.bet).toEqual({ value: 0, extra: 0, win: 0, rank: 0 });
++    expect(h2.bet.some((r) => r.name === '路人')).toBe(false);
++  });
++
++  it('战绩落盘：重启后还在（名人堂不靠内存里的临时数据）', () => {
++    const dir = mkdtempSync(join(tmpdir(), 'fbstore-'));
++    const file = join(dir, 'players.json');
++    const key = PlayerStore.key(tok('F'));
++    const s1 = new PlayerStore(file);
++    s1.set(key, { profile: profile('存档哥') as never, seen: Date.now(), uid: 5, fb: { n: 12, win: 3, got: 900, best: 400 } });
++    s1.flush();
++    const s2 = new PlayerStore(file);
++    expect(s2.get(key)?.fb).toEqual({ n: 12, win: 3, got: 900, best: 400 });
++    rmSync(dir, { recursive: true, force: true });
++  });
++
++  it('离摊位太远不能押（位置由服务器的互动区判定，客户端骗不了）', async () => {
++    srv = await startServer({ port: 0, world: { ...world, spawn: { x: 10, y: 10 } }, game: { mons: { gift: false } } });
++    const a = await client(srv.port, '远处的人', tok('D'));
++    const key = PlayerStore.key(tok('D'));
++    srv.store.get(key)!.inv = { fish_crucian: 5 };
++    srv.store.touch();
++    const n = a.msgs.length;
++    a.send({ t: 'fishbet', id: 'fish_crucian' });
++    const r = await a.wait('fishbet_result', n);
++    expect(r.ok).toBe(false);
++    expect(r.msg).toContain('湖边');
++    expect(srv.store.get(key)!.inv?.fish_crucian).toBe(5);
++  });
++});
+diff --git a/tools/art/props.ts b/tools/art/props.ts
+index 951e5c7..21bf1d6 100644
+--- a/tools/art/props.ts
++++ b/tools/art/props.ts
+@@ -594,6 +594,71 @@ export function parasolTable(variant: number): Sprite {
+   return { img: out, ax: 18, ay: 36, block: { x: -10, y: -5, w: 20, h: 5 } };
+ }
+ function shade2(c: RGBA, f: number): RGBA { return [c[0] * f, c[1] * f, c[2] * f, 255].map(Math.round) as RGBA; }
++/**
++ * 鱼力全开·赌鱼铺（湖岸摊位）：遮阳棚 + 木柜台 + 一盆待押的鱼 + 挂着的小木牌。
++ * 5 格宽、4 格高；脚点在底部正中，柜台正面留出"老板站着"的错觉（其实是空的）。
++ */
++export function fishStall(): Sprite {
++  const W = 82, H = 78;
++  const img = new Img(W, H);
++  const w = PAL.wood;
++  const red = hex('#c4503c'), cream = hex('#f2e3c4');
++  // ---- 两根前立柱 + 后立柱（后柱只露一截，给棚子一点厚度）
++  for (const x of [7, W - 12]) {
++    img.rect(x, 30, 5, 44, w[2]); img.vline(x, 30, 44, w[4]); img.vline(x + 4, 30, 44, w[1]);
++    img.rect(x - 1, 70, 7, 4, w[1]);                    // 脚
++  }
++  // ---- 遮阳棚：红白条纹，前沿低、后沿高（俯视下就是一条斜带）
++  for (let y = 0; y < 16; y++) {
++    const half = 39 - Math.round(y * 0.35);             // 上窄下宽
++    for (let x = Math.round(W / 2 - half); x <= Math.round(W / 2 + half); x++) {
++      const stripe = ((x + 200) >> 2) % 2 === 0;
++      img.set(x, 12 + y, stripe ? red : cream);
++    }
++  }
++  img.hline(2, 27, W - 4, hex('#8f3a2c'));              // 棚沿阴影
++  img.hline(2, 26, W - 4, hex('#a8452f'));
++  // 波浪形棚边（每 8px 一个弧）
++  for (let x = 3; x < W - 4; x += 8) { img.rect(x, 28, 6, 2, red); img.rect(x + 2, 30, 2, 1, red); }
++  // ---- 柜台：桌面 + 正面木板 + 踢脚
++  img.rect(4, 42, W - 8, 6, w[4]); img.hline(4, 42, W - 8, hex('#e8bd85'));   // 台面
++  img.rect(4, 48, W - 8, 22, w[3]);
++  for (let x = 8; x < W - 8; x += 7) { img.vline(x, 48, 22, w[2]); img.vline(x + 1, 48, 22, w[4]); }
++  img.rect(4, 66, W - 8, 4, w[1]);                       // 踢脚
++  img.hline(4, 48, W - 8, w[1]);
++  // ---- 台面上的水盆：木盆 + 水面 + 三条待押的鱼（露背脊和尾巴）
++  img.ellipse(W / 2, 39, 20, 7, w[1]);
++  img.ellipse(W / 2, 38, 19, 6, hex('#2f7a96'));
++  img.ellipse(W / 2, 37.4, 17, 4.6, hex('#3f94a8'));
++  img.ellipse(W / 2 - 5, 36.6, 7, 1.8, hex('#66b4c0'));  // 高光
++  const fishCols = [hex('#e08a3a'), hex('#d9c08a'), hex('#c9543f')];
++  [[-9, 38], [0, 40], [9, 37]].forEach(([dx, y], i) => {
++    const cx = W / 2 + dx;
++    img.ellipse(cx, y, 4, 2, fishCols[i]);
++    img.rect(cx - 6, y - 1, 3, 1, fishCols[i]);          // 尾巴
++    img.rect(cx - 7, y, 2, 1, fishCols[i]);
++    img.set(cx + 2, y - 1, hex('#3a2a20'));              // 眼睛
++  });
++  // ---- 右侧：一摞竹筐（收了鱼就扔这里）
++  img.ellipse(W - 13, 41, 8, 3, hex('#b6905a'));
++  img.rect(W - 21, 36, 16, 5, hex('#a8814c')); img.hline(W - 21, 36, 16, hex('#c9a166'));
++  for (let x = W - 20; x < W - 6; x += 3) img.vline(x, 37, 3, hex('#8a6a3c'));
++  // ---- 左侧：挂着的秤（钩子 + 秤盘），暗示"称重开赌"
++  img.rect(12, 30, 1, 8, PAL.metal[1]);
++  img.ellipse(12, 40, 4, 1.6, PAL.metal[2]);
++  img.rect(9, 30, 7, 1, PAL.metal[3]);
++  // ---- 台面正中的小木牌：画一条鱼（文字由世界标签负责，这里只要形）
++  img.rect(W / 2 - 10, 50, 20, 11, hex('#d8b07a'));
++  img.hline(W / 2 - 10, 50, 20, hex('#f0d0a0')); img.hline(W / 2 - 10, 60, 20, w[1]);
++  img.ellipse(W / 2 + 1, 55.5, 5, 2.2, hex('#3f6f8a'));
++  img.rect(W / 2 - 7, 55, 3, 1, hex('#3f6f8a')); img.rect(W / 2 - 8, 56, 3, 1, hex('#3f6f8a'));
++  img.set(W / 2 + 4, 55, hex('#e8f6ff'));                // 眼睛（白点）
++
++  const out = img.outlined(PAL.outline);
++  sh(out, W / 2, H - 3, 37, 3);
++  return { img: out, ax: W / 2, ay: H - 4, block: { x: -30, y: -6, w: 60, h: 6 } };
++}
++
+ /** 木质栈桥短墩（桥面由 boardwalk 材质铺出，这里只做桥头灯柱） */
+ export function dockPost(): Sprite {
+   const img = new Img(8, 22);
