@@ -1,0 +1,1105 @@
+diff --git a/src/shared/furn.ts b/src/shared/furn.ts
+new file mode 100644
+index 0000000..f684a5a
+--- /dev/null
++++ b/src/shared/furn.ts
+@@ -0,0 +1,147 @@
++/**
++ * 家具目录与摆放规则（客户端与服务器共用）。
++ *
++ * - `FURN_SHOP`：能买的家具（价格、分类、占地）。名字/分类和 tools/art/furniture-home.ts 的 HOME_INFO 对应。
++ * - `DORM_STATIC`：宿舍里"本来就有"的家具（床/桌/柜/宝箱/浴缸…），摆新东西时要把它们算成已占用。
++ *   这份表必须和 data/interiors/dorm.json 一致（有测试盯着）。
++ * - 占地只用 fw×fh；旋转后的宽高互换由 `furnMeta` 合成，不依赖 furniture-meta.json（服务器不需要读资源文件）。
++ */
++import type { Rot } from './interior';
++import type { FurnMeta } from './place';
++
++/** 家具分类（商店里的分组顺序） */
++export const FURN_CATS = ['坐具', '桌柜', '家电', '灯具', '地毯', '墙面', '绿植', '其他'] as const;
++export type FurnCat = (typeof FURN_CATS)[number];
++
++export interface FurnDef {
++  k: string;
++  name: string;
++  /** 校园币；0 = 不卖（宿舍自带的） */
++  price: number;
++  cat: FurnCat;
++  fw: number;
++  fh: number;
++  /** 摆在桌面上的小件：不占地 */
++  top?: boolean;
++  /** 平铺在地上不挡路（地毯） */
++  flat?: boolean;
++  /** 墙面挂件（fh = 0，挂在北墙，不占地面） */
++  wall?: boolean;
++  note: string;
++}
++
++/** 能买的家具：价格按"校园币"定档，便宜 60~150、常用 200~400、讲究 500~900 */
++export const FURN_SHOP: readonly FurnDef[] = [
++  { k: 'splant', name: '小盆栽', price: 60, cat: '绿植', fw: 1, fh: 1, top: true, note: '摆在桌上的小绿植' },
++  { k: 'desklamp', name: '台灯', price: 80, cat: '灯具', fw: 1, fh: 1, top: true, note: '桌上的小台灯，晚上屋里更暖' },
++  { k: 'shoe', name: '鞋架', price: 90, cat: '桌柜', fw: 1, fh: 1, note: '两层，能放两双鞋' },
++  { k: 'poster', name: '风景海报', price: 110, cat: '墙面', fw: 1, fh: 0, wall: true, note: '挂在北墙上的小画' },
++  { k: 'armchair', name: '单人扶手椅', price: 120, cat: '坐具', fw: 1, fh: 1, note: '一个人窝着刚好' },
++  { k: 'potplant', name: '大盆栽', price: 130, cat: '绿植', fw: 1, fh: 1, note: '角落里的绿意' },
++  { k: 'catbed', name: '猫窝', price: 140, cat: '其他', fw: 1, fh: 1, note: '垫子软，猫会想躺' },
++  { k: 'wallclock', name: '挂钟', price: 150, cat: '墙面', fw: 1, fh: 0, wall: true, note: '挂在墙上，指针会走' },
++  { k: 'coffee', name: '木茶几', price: 160, cat: '桌柜', fw: 2, fh: 1, note: '矮茶几，上面放了杂志和杯子' },
++  { k: 'floorlamp', name: '落地灯', price: 200, cat: '灯具', fw: 1, fh: 1, note: '站着的一盏灯，罩里透暖光' },
++  { k: 'rug', name: '花纹地毯', price: 240, cat: '地毯', fw: 3, fh: 2, flat: true, note: '3×2，铺在地上不挡路' },
++  { k: 'couch', name: '青绿沙发', price: 380, cat: '坐具', fw: 3, fh: 1, note: '三人座，两个坐垫' },
++  { k: 'mirror', name: '穿衣镜', price: 320, cat: '其他', fw: 1, fh: 1, note: '木框立镜，能照全身' },
++  { k: 'washer', name: '洗衣机', price: 460, cat: '家电', fw: 1, fh: 1, note: '滚筒的，门上有一圈玻璃' },
++  { k: 'tvset', name: '电视柜+电视', price: 520, cat: '桌柜', fw: 2, fh: 1, note: '柜子两门，屏幕上带冷光' },
++  { k: 'aquarium', name: '鱼缸', price: 680, cat: '绿植', fw: 2, fh: 1, note: '2 格宽，有水和两条小鱼' },
++  { k: 'fireplace', name: '壁炉', price: 900, cat: '其他', fw: 2, fh: 1, note: '砖砌的，里面有柴火和火光' },
++];
++
++/** 宿舍自带的东西（不卖，但摆新家具时要算占用）。和 data/interiors/dorm.json 对应 */
++export const DORM_STATIC: readonly { k: string; x: number; y: number }[] = [
++  { k: 'dsign', x: 1, y: 2 },       // 门牌（墙面，不占地）
++  { k: 'ac', x: 9, y: 1 },          // 空调（墙面）
++  { k: 'poster', x: 11, y: 2 },     // 海报（墙面）
++  { k: 'dbed', x: 1, y: 3 },
++  { k: 'deskpc', x: 6, y: 3 },
++  { k: 'chairup', x: 6, y: 4 },
++  { k: 'dwardrobe', x: 12, y: 3 },
++  { k: 'dchest', x: 14, y: 3 },
++  { k: 'dtub', x: 13, y: 6 },
++  { k: 'potplant', x: 2, y: 7 },
++  { k: 'catbed', x: 13, y: 8 },
++  { k: 'bin', x: 1, y: 8 },
++  { k: 'plant', x: 14, y: 9 },
++];
++
++/** 不卖的（宿舍自带）家具占地：名字只是提示用 */
++const STATIC_FOOT: Record<string, { name: string; fw: number; fh: number; top?: boolean }> = {
++  dbed: { name: '单人床', fw: 2, fh: 3 },
++  deskpc: { name: '木桌+电脑', fw: 2, fh: 1 },
++  chairup: { name: '木椅', fw: 1, fh: 1 },
++  dwardrobe: { name: '衣柜', fw: 2, fh: 1 },
++  dchest: { name: '宝箱', fw: 1, fh: 1 },
++  dtub: { name: '浴缸', fw: 2, fh: 2 },
++  plant: { name: '绿植', fw: 1, fh: 1 },
++  bin: { name: '垃圾桶', fw: 1, fh: 1 },
++  dsign: { name: '门牌', fw: 5, fh: 0 },
++  ac: { name: '空调', fw: 2, fh: 0 },
++};
++
++/** 一间宿舍最多摆几件（再多屋里就转不开身了） */
++export const DORM_PLACED_MAX = 24;
++/** 同一种家具最多存几件 */
++export const DORM_OWN_MAX = 20;
++
++export const FURN_BY_K: ReadonlyMap<string, FurnDef> = new Map(FURN_SHOP.map((f) => [f.k, f]));
++export const furnDef = (k: unknown): FurnDef | undefined => (typeof k === 'string' ? FURN_BY_K.get(k) : undefined);
++/** 这件东西能不能摆（买的 + 宿舍自带的都算，自带的不许玩家摆） */
++export const isPlaceable = (k: string): boolean => FURN_BY_K.has(k);
++
++/** 给 place.ts 用的元数据：占地 + 四个朝向（旋转就是宽高互换） */
++export function furnMeta(k: string): FurnMeta | undefined {
++  const d = FURN_BY_K.get(k);
++  const fw = d?.fw ?? STATIC_FOOT[k]?.fw, fh = d?.fh ?? STATIC_FOOT[k]?.fh;
++  if (fw === undefined || fh === undefined) return undefined;
++  const r = (w: number, h: number) => ({ fw: w, fh: h });
++  return {
++    fw, fh, top: !!d?.top, flat: !!d?.flat,
++    rots: { 0: r(fw, fh), 90: r(fh, fw), 180: r(fw, fh), 270: r(fh, fw) },
++  };
++}
++
++export interface PlacedFurn { k: string; x: number; y: number; rot: Rot }
++
++const ROTS: Rot[] = [0, 90, 180, 270];
++const isRot = (v: unknown): v is Rot => ROTS.includes(v as Rot);
++
++/** 从存档/网络来的已摆家具：丢掉不认识的、越界坐标、非整数；最多 DORM_PLACED_MAX 件 */
++export function cleanPlaced(raw: unknown): PlacedFurn[] {
++  if (!Array.isArray(raw)) return [];
++  const out: PlacedFurn[] = [];
++  for (const it of raw) {
++    if (!it || typeof it !== 'object') continue;
++    const o = it as Record<string, unknown>;
++    if (!isPlaceable(String(o.k))) continue;
++    const x = Number(o.x), y = Number(o.y);
++    if (!Number.isInteger(x) || !Number.isInteger(y) || x < 0 || y < 0 || x > 48 || y > 40) continue;
++    out.push({ k: String(o.k), x, y, rot: isRot(o.rot) ? o.rot : 0 });
++    if (out.length >= DORM_PLACED_MAX) break;
++  }
++  return out;
++}
++
++/** 家具仓库（k → 件数）：只留认识的 key，每件 1~DORM_OWN_MAX */
++export function cleanOwned(raw: unknown): Record<string, number> {
++  const out: Record<string, number> = {};
++  if (!raw || typeof raw !== 'object') return out;
++  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
++    if (!isPlaceable(k)) continue;
++    const n = Math.floor(Number(v));
++    if (!Number.isFinite(n) || n <= 0) continue;
++    out[k] = Math.min(n, DORM_OWN_MAX);
++  }
++  return out;
++}
++
++/** 仓库里一共有几件（界面上显示"家具仓库 8 件"） */
++export const ownedTotal = (own: Record<string, number>): number => Object.values(own).reduce((a, b) => a + b, 0);
++
++/** 商店里按分类分组，空分类不出现 */
++export function shopByCat(): { cat: FurnCat; items: FurnDef[] }[] {
++  return FURN_CATS.map((cat) => ({ cat, items: FURN_SHOP.filter((f) => f.cat === cat) })).filter((g) => g.items.length > 0);
++}
+diff --git a/src/shared/place.ts b/src/shared/place.ts
+new file mode 100644
+index 0000000..430025f
+--- /dev/null
++++ b/src/shared/place.ts
+@@ -0,0 +1,140 @@
++/**
++ * 室内摆放规则（纯函数，服务器与客户端共用）。
++ *
++ * 家具的占地/锚点来自 `public/assets/generated/furniture-meta.json`（由 tools/world/interiors.ts 生成），
++ * 这里只管"能不能摆"：网格吸附、旋转后的占地、边界、重叠、门前通道。
++ * 服务端用它做校验（不信任客户端），客户端用它做落点预览（红/绿）。
++ *
++ * 还没管的：墙面挂件（fh=0 的字画/横幅/门牌）——它们挂在北墙上、不占地面格，
++ * 以后要让玩家挂东西时再单独加一条 `isWall(m)` 分支，别直接塞进这里的边界判断。
++ */
++import type { Rot } from './interior';
++
++/** 家具目录里一件家具的元数据（furniture-meta.json 的条目，只要用得到的字段） */
++export interface FurnMeta {
++  fw: number;
++  fh: number;
++  w?: number;
++  h?: number;
++  top?: boolean;
++  /** 平铺在地上、不挡路（地毯） */
++  flat?: boolean;
++  /** 墙面挂件（fh = 0）：挂在北墙，格子只算一排 */
++  wall?: boolean;
++  rots?: Partial<Record<Rot, { fw: number; fh: number; w?: number; h?: number; mx?: number; my?: number }>>;
++}
++
++/** 一件摆好的家具（存档里就存这几个字段） */
++export interface Placed { k: string; x: number; y: number; rot: Rot }
++
++/** 一间房：格数 + 南墙门洞（和 src/shared/interior.ts 的 InteriorSpec 对齐） */
++export interface RoomBox { w: number; h: number; exit: { x: number; w: number } }
++
++export const WALL_N = 3;   // 北墙占上面 3 格（给"墙面挂件"留位置）
++export const WALL = 1;     // 东西南各 1 格
++export const DOOR_CLEAR = 2; // 门前留 2 格空，别把出口堵成"墙"
++
++/** 旋转后的占地（格）。rots 里没有这个角度 = 这件家具不能转 */
++export function footOf(m: FurnMeta, rot: Rot): { fw: number; fh: number } | null {
++  if (!rot) return { fw: m.fw, fh: m.fh };
++  const r = m.rots?.[rot];
++  if (!r) return null;
++  return { fw: r.fw, fh: r.fh };
++}
++
++/** 可以摆的格子区间（含端点），给 UI 画网格用 */
++export function placeArea(box: RoomBox) {
++  return { x0: WALL, y0: WALL_N, x1: box.w - WALL - 1, y1: box.h - WALL - 1 };
++}
++
++/** 门洞 + 门前的通道（任何家具都不能压这几格） */
++export function doorCells(box: RoomBox): Set<string> {
++  const out = new Set<string>();
++  const y0 = box.h - WALL - 1;                       // 南墙里面那一行
++  for (let y = Math.max(WALL_N, y0 - (DOOR_CLEAR - 1)); y <= y0; y++) {
++    for (let x = box.exit.x; x < box.exit.x + box.exit.w; x++) out.add(`${x},${y}`);
++  }
++  return out;
++}
++
++/** 墙面挂件：fh = 0，只能挂在北墙那几行 */
++export const isWall = (m: FurnMeta): boolean => m.fh === 0 || !!m.wall;
++
++/** 一件家具占的格子（top 小件摆桌面、flat 地毯平铺：都不算占地；墙面挂件只算一排） */
++export function cellsOf(m: FurnMeta, p: Placed): string[] {
++  if (m.top || m.flat) return [];
++  const f = footOf(m, p.rot);
++  if (!f) return [];
++  const out: string[] = [];
++  if (isWall(m)) { for (let i = 0; i < f.fw; i++) out.push(`${p.x + i},${p.y}`); return out; }
++  for (let j = 0; j < f.fh; j++) for (let i = 0; i < f.fw; i++) out.push(`${p.x + i},${p.y + j}`);
++  return out;
++}
++
++/** 像素坐标 → 格（拖拽时把鼠标位置换成分格） */
++export const snapTile = (px: number, py: number, tile = 16) => ({ x: Math.floor(px / tile), y: Math.floor(py / tile) });
++
++export type PlaceWhy = 'bad-rot' | 'out-of-room' | 'door' | 'overlap' | 'unknown';
++
++export interface PlaceCheck { ok: boolean; why?: PlaceWhy; with?: string }
++
++export interface PlaceContext {
++  box: RoomBox;
++  /** 家具 key → 元数据（未知 key 直接拒） */
++  meta: (k: string) => FurnMeta | undefined;
++  /** 已经占着的家具（房间自带的 + 玩家摆的其他件） */
++  taken: { p: Placed; m: FurnMeta }[];
++  /** 正在移动的那一件的下标：校验时跳过它自己，不然永远和自己重叠 */
++  ignore?: number;
++}
++
++/**
++ * 能不能把 k 摆在 (x,y) 且转到 rot。
++ * 顺序就是玩家最容易踩的顺序：能不能转 → 在不在屋里 → 压没压门 → 撞没撞别的。
++ */
++export function checkPlace(ctx: PlaceContext, p: Placed): PlaceCheck {
++  const m = ctx.meta(p.k);
++  if (!m) return { ok: false, why: 'unknown' };
++  if (!footOf(m, p.rot)) return { ok: false, why: 'bad-rot' };
++  if (m.top) return { ok: true };                     // 桌面小件不占地，随便摆（重叠由上层按桌面判断）
++
++  const f = footOf(m, p.rot)!;
++  if (isWall(m)) {                                    // 挂在北墙：横向不超出房间、纵向在墙里
++    if (p.x < 0 || p.x + f.fw - 1 > ctx.box.w - 1 || p.y < 0 || p.y > WALL_N - 1) return { ok: false, why: 'out-of-room' };
++    const mineW = cellsOf(m, p);
++    for (let i = 0; i < ctx.taken.length; i++) {
++      if (i === ctx.ignore) continue;
++      const o = ctx.taken[i], theirs = cellsOf(o.m, o.p);
++      for (const c of mineW) if (theirs.includes(c)) return { ok: false, why: 'overlap', with: o.p.k };
++    }
++    return { ok: true };
++  }
++  const a = placeArea(ctx.box);
++  if (p.x < a.x0 || p.y < a.y0 || p.x + f.fw - 1 > a.x1 || p.y + f.fh - 1 > a.y1) return { ok: false, why: 'out-of-room' };
++
++  if (m.flat) return { ok: true };                    // 地毯：只要求不出界，谁都能踩上去
++
++  const mine = cellsOf(m, p);
++  const door = doorCells(ctx.box);
++  for (const c of mine) if (door.has(c)) return { ok: false, why: 'door' };
++
++  for (let i = 0; i < ctx.taken.length; i++) {
++    if (i === ctx.ignore) continue;
++    const o = ctx.taken[i];
++    const theirs = cellsOf(o.m, o.p);
++    for (const c of mine) if (theirs.includes(c)) return { ok: false, why: 'overlap', with: o.p.k };
++  }
++  return { ok: true };
++}
++
++/** 玩家看到的话（服务端原样回给客户端，不用客户端自己编） */
++export function placeWhyText(why: PlaceWhy | undefined): string {
++  switch (why) {
++    case 'bad-rot': return '这件家具不能转成这个方向';
++    case 'out-of-room': return '放不下：超出房间了（别贴着墙）';
++    case 'door': return '挡到门口了，往里挪一点';
++    case 'overlap': return '和别的东西叠在一起了';
++    case 'unknown': return '没有这件家具';
++    default: return '摆不了';
++  }
++}
+diff --git a/src/ui/PlaceBar.ts b/src/ui/PlaceBar.ts
+new file mode 100644
+index 0000000..130174b
+--- /dev/null
++++ b/src/ui/PlaceBar.ts
+@@ -0,0 +1,92 @@
++/**
++ * 宿舍「布置」条：底部一条横栏，左边是家具仓库（点一下拿起来），右边是已经摆出来的（点一下收回去）。
++ * 只管界面，摆到哪一格、能不能摆由 InteriorScene + 服务器决定。
++ */
++import { FURN_SHOP, furnDef, ownedTotal } from '@/shared/furn';
++import type { PlacedFurn } from '@/shared/furn';
++
++const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
++  const e = document.createElement(tag);
++  if (cls) e.className = cls;
++  if (text !== undefined) e.textContent = text;
++  return e;
++};
++
++export interface PlaceHooks {
++  pick(k: string): void;
++  take(i: number): void;
++  /** 把屋里摆着的全收回仓库 */
++  takeAll(): void;
++  rotate(): void;
++  close(): void;
++}
++
++export class PlaceBar {
++  private root = el('div', 'place-bar hidden');   // 注意：挂在 #hud 里，而 #hud 是 pointer-events:none，所以要自己打开
++  private left = el('div', 'place-list');
++  private right = el('div', 'place-list');
++  private tip = el('div', 'place-tip', '');
++  private rotBtn = el('button', 'btn', '↻ 旋转');
++  private takeAllBtn = el('button', 'btn', '↩ 全部收回');
++  private closeBtn = el('button', 'btn', '✕ 收起面板');
++  private own: Record<string, number> = {};
++  private placed: PlacedFurn[] = [];
++
++  constructor(private hooks: PlaceHooks) {
++    const head = el('div', 'place-head');
++    head.append(el('span', 'place-title', '🛋 布置宿舍'), this.tip);
++    const body = el('div', 'place-cols');
++    const l = el('div', 'place-col'), r = el('div', 'place-col');
++    l.append(el('div', 'place-sub', '家具仓库（点一下拿起来）'), this.left);
++    r.append(el('div', 'place-sub', '已经摆着的（点一下收回）'), this.right);
++    body.append(l, r);
++    const foot = el('div', 'place-foot');
++    this.rotBtn.type = 'button'; this.closeBtn.type = 'button'; this.takeAllBtn.type = 'button';
++    this.rotBtn.addEventListener('click', () => this.hooks.rotate());
++    this.takeAllBtn.addEventListener('click', () => this.hooks.takeAll());
++    this.closeBtn.addEventListener('click', () => this.hooks.close());
++    foot.append(this.rotBtn, this.takeAllBtn, this.closeBtn);
++    this.root.append(head, body, foot);
++    this.root.style.pointerEvents = 'auto';   // 双保险：样式表没生效也点得到
++    document.querySelectorAll('.place-bar').forEach((n) => n.remove()); // 重进场景时不留旧条
++    this.root.style.pointerEvents = 'auto';   // 双保险：样式表没生效也点得到
++    document.querySelectorAll('.place-bar').forEach((n) => n.remove()); // 重进场景时不留旧条
++    (document.getElementById('hud') ?? document.body).append(this.root);
++    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && this.isOpen) { e.stopPropagation(); this.hooks.close(); } });
++  }
++
++  get isOpen() { return !this.root.classList.contains('hidden'); }
++  open() { this.root.classList.remove('hidden'); }
++  close() { this.root.classList.add('hidden'); }
++  say(text: string, ok = true) { this.tip.textContent = text; this.tip.classList.toggle('bad', !ok); }
++
++  set(own: Record<string, number>, placed: PlacedFurn[]): void {
++    this.own = own; this.placed = placed;
++    if (!this.isOpen) return;
++    this.render();
++  }
++
++  render(): void {
++    this.left.replaceChildren();
++    const keys = FURN_SHOP.map((f) => f.k).filter((k) => (this.own[k] ?? 0) > 0);
++    if (!keys.length) this.left.append(el('div', 'place-empty', '仓库是空的：先去商店买几件家具'));
++    for (const k of keys) {
++      const b = el('button', 'place-chip', `${furnDef(k)?.name ?? k} ×${this.own[k]}`);
++      b.type = 'button';
++      b.addEventListener('click', () => this.hooks.pick(k));
++      this.left.append(b);
++    }
++    this.right.replaceChildren();
++    if (!this.placed.length) this.right.append(el('div', 'place-empty', '还没摆东西'));
++    this.placed.forEach((f, i) => {
++      const b = el('button', 'place-chip remove', `✕ ${furnDef(f.k)?.name ?? f.k}（${f.x},${f.y}${f.rot ? ` ${f.rot}°` : ''}）`);
++      b.type = 'button';
++      b.title = '点一下收回家具仓库';
++      b.addEventListener('click', () => this.hooks.take(i));
++      this.right.append(b);
++    });
++    const n = ownedTotal(this.own);
++    this.tip.textContent = `仓库 ${n} 件 · 屋里 ${this.placed.length} 件（点「✕」收回）`;
++    this.takeAllBtn.disabled = this.placed.length === 0;
++  }
++}
+diff --git a/tests/furn.test.ts b/tests/furn.test.ts
+new file mode 100644
+index 0000000..f801bef
+--- /dev/null
++++ b/tests/furn.test.ts
+@@ -0,0 +1,85 @@
++import { describe, expect, it } from 'vitest';
++import { readFileSync } from 'node:fs';
++import { join } from 'node:path';
++import { DORM_OWN_MAX, DORM_PLACED_MAX, DORM_STATIC, FURN_SHOP, cleanOwned, cleanPlaced, furnDef, furnMeta, ownedTotal, shopByCat } from '../src/shared/furn';
++import { checkPlace } from '../src/shared/place';
++import { DORM_ROOM } from '../src/shared/dorm';
++
++const GEN = join(__dirname, '..', 'public', 'assets', 'generated');
++
++describe('家具目录', () => {
++  it('每件都有名字、分类、正的价格和合理的占地', () => {
++    expect(FURN_SHOP.length).toBeGreaterThan(10);
++    for (const f of FURN_SHOP) {
++      expect(f.name, f.k).toBeTruthy();
++      expect(f.price, f.k).toBeGreaterThan(0);
++      expect(f.fw, f.k).toBeGreaterThanOrEqual(1);
++      expect(f.fh, f.k).toBeGreaterThanOrEqual(0);   // 0 = 墙面挂件
++      expect(f.fw * 16, f.k).toBeLessThanOrEqual(64); // 再宽就摆不进宿舍了
++    }
++    expect(new Set(FURN_SHOP.map((f) => f.k)).size).toBe(FURN_SHOP.length); // 不能重 key
++    expect(shopByCat().reduce((n, g) => n + g.items.length, 0)).toBe(FURN_SHOP.length);
++  });
++
++  it('占地表要和编译出来的 furniture-meta.json 对得上（防止改了美术忘了改规则）', () => {
++    const meta = JSON.parse(readFileSync(join(GEN, 'furniture-meta.json'), 'utf8')) as Record<string, { fw: number; fh: number; top?: boolean; flat?: boolean }>;
++    for (const f of FURN_SHOP) {
++      const m = meta[f.k];
++      expect(m, `${f.k} 不在 furniture-meta.json 里（要先 npm run assets:interiors）`).toBeTruthy();
++      expect([m.fw, m.fh], f.k).toEqual([f.fw, f.fh]);
++      expect(!!m.top, `${f.k} top`).toBe(!!f.top);
++      expect(!!m.flat, `${f.k} flat`).toBe(!!f.flat);
++    }
++  });
++
++  it('宿舍自带的家具和 data/interiors/dorm.json 一致', () => {
++    const dorm = JSON.parse(readFileSync(join(__dirname, '..', 'data', 'interiors', 'dorm.json'), 'utf8')) as { furniture: { k: string; x: number; y: number }[] };
++    const mine = DORM_STATIC.map((s) => `${s.k}@${s.x},${s.y}`).sort();
++    const theirs = dorm.furniture.map((s) => `${s.k}@${s.x},${s.y}`).sort();
++    expect(mine).toEqual(theirs);
++    for (const s of DORM_STATIC) expect(furnMeta(s.k), s.k).toBeTruthy(); // 自带家具也要有占地数据
++  });
++
++  it('仓库/已摆数据的清洗：丢掉不认识的 key、越界坐标、负数', () => {
++    expect(cleanOwned({ couch: 2, 不存在: 3, splant: -1, shoe: 1.7 })).toEqual({ couch: 2, shoe: 1 });
++    expect(cleanOwned({ couch: 999 })).toEqual({ couch: DORM_OWN_MAX });
++    expect(cleanPlaced([{ k: 'couch', x: 3, y: 7, rot: 90 }, { k: '不存在', x: 1, y: 1 }, { k: 'rug', x: -1, y: 2 }, { k: 'splant', x: 2.5, y: 3 }]))
++      .toEqual([{ k: 'couch', x: 3, y: 7, rot: 90 }]);
++    expect(cleanPlaced(new Array(DORM_PLACED_MAX + 5).fill({ k: 'splant', x: 2, y: 7, rot: 0 })).length).toBe(DORM_PLACED_MAX);
++    expect(ownedTotal({ couch: 2, splant: 3 })).toBe(5);
++  });
++});
++
++describe('部署到宿舍：规则真的拦得住', () => {
++  const box = { w: DORM_ROOM.w, h: DORM_ROOM.h, exit: { x: DORM_ROOM.exitX, w: DORM_ROOM.exitW } };
++  const taken = DORM_STATIC.map((s) => ({ p: { k: s.k, x: s.x, y: s.y, rot: 0 as const }, m: furnMeta(s.k)! }));
++  const tryAt = (k: string, x: number, y: number, rot: 0 | 90 | 180 | 270 = 0) => checkPlace({ box, meta: furnMeta, taken }, { k, x, y, rot });
++
++  it('空地上能摆', () => {
++    expect(tryAt('couch', 3, 7).ok).toBe(true);   // 沙发 3×1，y=7 是空的
++    expect(tryAt('rug', 4, 7).ok).toBe(true);
++  });
++
++  it('压在床上 / 桌子上要挡住', () => {
++    expect(tryAt('couch', 1, 4).why).toBe('overlap');   // 床在 (1,3) 2×3
++    expect(tryAt('shoe', 6, 3).why).toBe('overlap');    // 桌子在 (6,3) 2×1
++    expect(tryAt('splant', 6, 3).ok).toBe(true);       // 桌面小件不占地，压在桌上也行
++  });
++
++  it('堵门口要挡住，地毯除外', () => {
++    expect(tryAt('couch', 7, 9).why).toBe('door');
++    expect(tryAt('rug', 7, 8).ok).toBe(true);
++  });
++
++  it('墙面挂件挂在北墙、按排占格', () => {
++    expect(tryAt('poster', 12, 1).ok).toBe(true);
++    expect(tryAt('poster', 11, 2).why).toBe('overlap');       // 宿舍自带海报在 (11,2)
++    expect(tryAt('poster', 5, 6).why).toBe('out-of-room');    // 挂不到屋子中间
++    expect(tryAt('wallclock', 30, 1).why).toBe('out-of-room');
++  });
++
++  it('旋转后宽高互换：3×1 的沙发转 90° 就占 3 行', () => {
++    expect(furnMeta('couch')!.rots![90]).toMatchObject({ fw: 1, fh: 3 });
++    expect(tryAt('couch', 7, 7, 90).why).toBe('door');        // 竖着占 y7~9，正好压住门口的通道
++  });
++});
+diff --git a/tests/furnserver.test.ts b/tests/furnserver.test.ts
+new file mode 100644
+index 0000000..36798f2
+--- /dev/null
++++ b/tests/furnserver.test.ts
+@@ -0,0 +1,100 @@
++import { describe, expect, it } from 'vitest';
++import { PlayerStore } from '../server/store';
++import { Dorms } from '../server/dorm';
++import { cleanDorm } from '../src/shared/dorm';
++import { validateProfile } from '../src/shared/profile';
++
++const profile = (validateProfile({ name: '测试', gender: 'm', look: 0, college: '机电工程学院', major: '机械设计制造', year: 2025, motto: '', cardNo: '2025000001' }) as { ok: true; profile: ReturnType<typeof validateProfile> extends { ok: true; profile: infer P } ? P : never }).profile;
++
++function setup(coin = 1000) {
++  const store = new PlayerStore(null);
++  store.set('k1', { profile, x: 0, y: 0, uid: 1, coin } as never);
++  const dorms = new Dorms(store, [{ name: '三社区B楼' }]);
++  return { store, dorms };
++}
++
++describe('买家具 / 摆家具（服务端）', () => {
++  it('买：扣校园币、进家具仓库；钱不够就整笔不成交', () => {
++    const { store, dorms } = setup(1000);
++    const r = dorms.buyFurn('k1', 'couch', 1);
++    expect(r.ok).toBe(true);
++    expect(store.get('k1')!.coin).toBe(1000 - 380);
++    expect(dorms.own('k1')).toEqual({ couch: 1 });
++
++    const poor = dorms.buyFurn('k1', 'fireplace', 1); // 900，只剩 620
++    expect(poor.ok).toBe(false);
++    expect(poor.msg).toContain('校园币不够');
++    expect(store.get('k1')!.coin).toBe(620);            // 失败不扣钱
++
++    expect(dorms.buyFurn('k1', '不存在', 1).ok).toBe(false);
++    expect(dorms.buyFurn('k1', 'couch', 0).msg).toBeTruthy(); // n 兜底成 1，但钱不够了
++  });
++
++  it('摆：从仓库拿一件放到空地上；占地/门口/重叠都被挡住', () => {
++    const { dorms } = setup(2000);
++    dorms.buyFurn('k1', 'couch', 1);
++    expect(dorms.placeFurn('k1', 'place', { k: 'couch', x: 3, y: 7, rot: 0 })).toEqual({ ok: true, msg: '摆好了：青绿沙发' });
++    expect(dorms.own('k1')).toEqual({});                 // 仓库空了
++    expect(dorms.placed('k1')).toEqual([{ k: 'couch', x: 3, y: 7, rot: 0 }]);
++
++    expect(dorms.placeFurn('k1', 'place', { k: 'couch', x: 3, y: 8, rot: 0 }).msg).toContain('仓库里没有'); // 只有一件
++    dorms.buyFurn('k1', 'couch', 1);
++    expect(dorms.placeFurn('k1', 'place', { k: 'couch', x: 1, y: 4, rot: 0 }).msg).toContain('叠在一起');   // 压床
++    expect(dorms.placeFurn('k1', 'place', { k: 'couch', x: 7, y: 9, rot: 0 }).msg).toContain('门口');       // 堵门
++    expect(dorms.placeFurn('k1', 'place', { k: 'couch', x: 20, y: 7, rot: 0 }).msg).toContain('超出房间');
++    expect(dorms.placed('k1').length).toBe(1);           // 都没摆进去
++  });
++
++  it('挪和收：挪到别处、收回来又回到仓库（可以再摆）', () => {
++    const { dorms } = setup(2000);
++    dorms.buyFurn('k1', 'rug', 1);
++    dorms.placeFurn('k1', 'place', { k: 'rug', x: 3, y: 7, rot: 0 });
++    expect(dorms.placeFurn('k1', 'move', { i: 0, x: 5, y: 7, rot: 90 })).toEqual({ ok: true, msg: '挪好了' });
++    expect(dorms.placed('k1')[0]).toEqual({ k: 'rug', x: 5, y: 7, rot: 90 });
++
++    expect(dorms.takeFurn('k1', 0).ok).toBe(true);
++    expect(dorms.placed('k1')).toEqual([]);
++    expect(dorms.own('k1')).toEqual({ rug: 1 });
++    expect(dorms.takeFurn('k1', 0).ok).toBe(false);      // 已经没了
++  });
++
++  it('屋里最多摆 24 件：满了就拒绝（不再扣仓库）', () => {
++    const { store, dorms } = setup(4000);
++    // 直接塞满 24 件（跳过校验，专门测上限）
++    store.get('k1')!.dm = { fr: Array.from({ length: 24 }, () => ({ k: 'splant', x: 2, y: 7, rot: 0 })) } as never;
++    dorms.buyFurn('k1', 'splant', 1);
++    const r = dorms.placeFurn('k1', 'place', { k: 'splant', x: 9, y: 7, rot: 0 });
++    expect(r.ok).toBe(false);
++    expect(r.msg).toContain('最多摆');
++    expect(dorms.own('k1')).toEqual({ splant: 1 });   // 没摆出去，仓库还在
++  });
++
++  it('存档：家具字段能原样存回来（重启不丢）', () => {
++    const { store, dorms } = setup(2000);
++    dorms.buyFurn('k1', 'couch', 1);
++    dorms.placeFurn('k1', 'place', { k: 'couch', x: 3, y: 7, rot: 0 });
++    const saved = cleanDorm(JSON.parse(JSON.stringify(store.get('k1')!.dm)));
++    expect(saved?.fr).toEqual([{ k: 'couch', x: 3, y: 7, rot: 0 }]);
++    expect(saved?.fo).toBeUndefined();                    // 空的仓库不落盘
++  });
++
++  it('第一次打开宿舍送一套基础家具，只送一次', () => {
++    const { store, dorms } = setup(50);
++    const v1 = dorms.view('k1', 0);
++    expect(Object.keys(v1.own).sort()).toEqual(['poster', 'rug', 'splant']);
++    dorms.takeFurn('k1', 0);                       // 用户把送的收掉
++    const v2 = dorms.view('k1', 0);
++    expect(v2.own).toEqual(v1.own);                 // 不会又送一遍
++    expect(store.get('k1')!.dm?.fgf).toBe(1);
++  });
++
++  it('dorm_data 里带上仓库和已摆（客户端/访客都用这份）', () => {
++    const { dorms } = setup(2000);
++    dorms.buyFurn('k1', 'shelf1', 1);                     // 不是家具：应该被拒
++    dorms.buyFurn('k1', 'tvset', 1);
++    dorms.placeFurn('k1', 'place', { k: 'tvset', x: 4, y: 7, rot: 0 });
++    const v = dorms.view('k1', 0);
++    expect(v.placed).toEqual([{ k: 'tvset', x: 4, y: 7, rot: 0 }]);
++    expect(v.own).toEqual({});
++  });
++});
+diff --git a/tests/place.test.ts b/tests/place.test.ts
+new file mode 100644
+index 0000000..8eac0b6
+--- /dev/null
++++ b/tests/place.test.ts
+@@ -0,0 +1,75 @@
++import { describe, expect, it } from 'vitest';
++import { checkPlace, cellsOf, doorCells, footOf, placeArea, snapTile, placeWhyText } from '../src/shared/place';
++import type { FurnMeta, Placed } from '../src/shared/place';
++
++/** 宿舍：16×11，门洞在南墙 x=7、宽 2（和 data/interiors/dorm.json 一致） */
++const box = { w: 16, h: 11, exit: { x: 7, w: 2 } };
++const desk: FurnMeta = { fw: 1, fh: 1 };
++const bed: FurnMeta = { fw: 2, fh: 3, rots: { 0: { fw: 2, fh: 3 }, 90: { fw: 3, fh: 2 } } };
++const sofa: FurnMeta = { fw: 3, fh: 1 };
++const cup: FurnMeta = { fw: 1, fh: 1, top: true };
++const carpet: FurnMeta = { fw: 3, fh: 2, flat: true };
++const table: Record<string, FurnMeta> = { desk, bed, sofa, cup, carpet };
++const ctx = (taken: { p: Placed; m: FurnMeta }[] = [], ignore?: number) => ({ box, meta: (k: string) => table[k], taken, ignore });
++
++const at = (k: string, x: number, y: number, rot: 0 | 90 | 180 | 270 = 0): Placed => ({ k, x, y, rot });
++
++describe('摆放规则', () => {
++  it('可摆区域：北墙 3 格、东西南各 1 格都不算', () => {
++    expect(placeArea(box)).toEqual({ x0: 1, y0: 3, x1: 14, y1: 9 });
++  });
++
++  it('旋转后的占地：床转 90° 宽高互换；没定义的角度不能转', () => {
++    expect(footOf(bed, 0)).toEqual({ fw: 2, fh: 3 });
++    expect(footOf(bed, 90)).toEqual({ fw: 3, fh: 2 });
++    expect(footOf(bed, 180)).toBeNull();
++  });
++
++  it('桌面小件不占地，也不参与重叠判断', () => {
++    expect(cellsOf(cup, at('cup', 5, 5))).toEqual([]);
++    expect(checkPlace(ctx([{ p: at('desk', 5, 5), m: desk }]), at('cup', 5, 5)).ok).toBe(true);
++  });
++
++  it('门口两格 + 门前通道都不能压（南墙里面一行算起）', () => {
++    const door = doorCells(box);
++    expect(door.has('7,9')).toBe(true);
++    expect(door.has('8,8')).toBe(true);
++    expect(door.has('9,9')).toBe(false);
++    // 3 格沙发横着摆在门口 → 挡门
++    const r = checkPlace(ctx(), at('sofa', 7, 9));
++    expect(r).toEqual({ ok: false, why: 'door' });
++  });
++
++  it('超出房间（贴墙 / 出界）要挡住，且理由能翻译成人话', () => {
++    expect(checkPlace(ctx(), at('sofa', 13, 5)).why).toBe('out-of-room'); // 13+3-1=15 > 14
++    expect(checkPlace(ctx(), at('desk', 0, 5)).why).toBe('out-of-room');  // 压西墙
++    expect(checkPlace(ctx(), at('desk', 3, 2)).why).toBe('out-of-room');  // 压北墙
++    expect(placeWhyText('out-of-room')).toContain('超出房间');
++  });
++
++  it('地毯不挡路：能压在别的东西下面，也能摆在门口', () => {
++    expect(cellsOf(carpet, at('carpet', 5, 5))).toEqual([]);
++    expect(checkPlace(ctx([{ p: at('desk', 5, 5), m: desk }]), at('carpet', 4, 5)).ok).toBe(true);
++    expect(checkPlace(ctx(), at('carpet', 7, 8)).ok).toBe(true);   // 门口那块也能铺
++    expect(checkPlace(ctx(), at('carpet', 14, 5)).why).toBe('out-of-room'); // 但不能出界
++  });
++
++  it('和已有家具重叠要挡住，并说出撞到谁了', () => {
++    const r = checkPlace(ctx([{ p: at('desk', 4, 4), m: desk }]), at('bed', 4, 4));
++    expect(r.ok).toBe(false);
++    expect(r.why).toBe('overlap');
++    expect(r.with).toBe('desk');
++  });
++
++  it('移动自己时跳过自身，不然永远和自己重叠', () => {
++    const taken = [{ p: at('desk', 4, 4), m: desk }];
++    expect(checkPlace(ctx(taken, 0), at('desk', 4, 4)).ok).toBe(true);
++    expect(checkPlace(ctx(taken), at('desk', 4, 4)).ok).toBe(false);
++  });
++
++  it('鼠标像素 → 格：吸附到左上角那一格', () => {
++    expect(snapTile(0, 0)).toEqual({ x: 0, y: 0 });
++    expect(snapTile(15, 15)).toEqual({ x: 0, y: 0 });
++    expect(snapTile(16, 31)).toEqual({ x: 1, y: 1 });
++  });
++});
+diff --git a/tools/art/furniture-home.ts b/tools/art/furniture-home.ts
+new file mode 100644
+index 0000000..2eaf976
+--- /dev/null
++++ b/tools/art/furniture-home.ts
+@@ -0,0 +1,374 @@
++/**
++ * 宿舍/家居家具（第二批）：沙发、茶几、电视、灯、地毯、挂钟、海报、绿植、鱼缸、壁炉、鞋架、衣帽架、洗衣机、猫窝…
++ * 参照星露谷的家具目录分类，风格跟着 furniture.ts / furniture-dorm.ts 走：16px 格、统一色板、深色描边。
++ *
++ * 约定（和 furniture.ts 完全一致）：
++ *   - 脚印 fw×fh（格），精灵宽度 = fw*16，精灵底边 = 脚印底边；
++ *   - 精灵可以向上超出脚印（灯、衣帽架这类"高的"东西），超出的部分不占地；
++ *   - fh = 0 表示墙面挂件（挂在北墙上，不占地面格，也不能旋转）；
++ *   - flat = true 表示"平铺在地上、不挡路"（地毯）。
++ */
++import { Img, hex, type RGBA } from './px.ts';
++import { PAL } from './palette.ts';
++import type { Furn } from './furniture.ts';
++
++const OUT = PAL.outline, W = PAL.wood, M = PAL.metal, L = PAL.leaf;
++const f = (img: Img, fw: number, fh: number, extra: Partial<Furn> = {}): Furn => ({ img: img.outlined(OUT), fw, fh, ...extra });
++
++const TEAL: RGBA[] = ['#245e5c', '#2f7a72', '#3f9690', '#5cb3a8', '#7fc9bd'].map((c) => hex(c)); // 青绿布艺
++const WARM: RGBA[] = ['#a8483a', '#c25c44', '#d97a58', '#e89a78'].map((c) => hex(c));           // 暖橘布艺
++const CREAM: RGBA[] = ['#cfc7b2', '#e4ddc9', '#f4efe0'].map((c) => hex(c));                     // 米白
++const BRICK: RGBA[] = ['#7a3a30', '#97483a', '#b25a44'].map((c) => hex(c));
++const GLASS: RGBA[] = ['#2c5486', '#3f73ab', '#5f98cc', '#8fc3ea'].map((c) => hex(c));
++const GOLD = hex('#e0b44a');
++
++/** 一块布面：底色 + 上沿高光 + 下沿暗边 + 两侧暗边 */
++function cloth(img: Img, x: number, y: number, w: number, h: number, c: RGBA[], bottom = 1) {
++  img.rect(x, y, w, h, c[2]);
++  img.hline(x, y, w, c[3]);
++  img.rect(x, y + h - bottom, w, bottom, c[1]);
++  img.vline(x, y, h, c[1]);
++  img.vline(x + w - 1, y, h, c[1]);
++}
++
++/* ────────────────────────── 坐具 ────────────────────────── */
++
++/** 沙发（3×1 格）：靠背 + 两个坐垫 + 扶手，木脚 */
++export function couch(): Furn {
++  const img = new Img(48, 30);
++  cloth(img, 2, 0, 44, 11, TEAL);                   // 靠背
++  img.rect(3, 2, 42, 4, TEAL[3]);                   // 靠背受光面
++  img.rect(2, 10, 44, 2, TEAL[0]);                  // 靠背与坐垫的分界
++  cloth(img, 0, 8, 6, 19, TEAL);                    // 左扶手
++  cloth(img, 42, 8, 6, 19, TEAL);                   // 右扶手
++  img.hline(1, 8, 4, TEAL[4]); img.hline(43, 8, 4, TEAL[4]);
++  cloth(img, 6, 12, 17, 12, TEAL, 2);               // 坐垫 1
++  cloth(img, 25, 12, 17, 12, TEAL, 2);
++  img.rect(6, 12, 17, 1, TEAL[4]); img.rect(25, 12, 17, 1, TEAL[4]);
++  img.rect(23, 13, 2, 11, TEAL[0]);                 // 两块坐垫之间的缝
++  img.rect(2, 25, 44, 3, TEAL[0]);                  // 座箱下沿
++  img.rect(3, 27, 3, 3, W[1]); img.rect(42, 27, 3, 3, W[1]); // 木脚
++  return f(img, 3, 1);
++}
++
++/** 单人扶手椅（1×1 格）：靠背略矮，两侧扶手是圆柱 */
++export function armchair(): Furn {
++  const img = new Img(16, 26);
++  cloth(img, 3, 0, 10, 12, WARM);                   // 靠背
++  img.rect(4, 1, 8, 3, WARM[3]);
++  img.rect(1, 6, 3, 13, WARM[1]); img.hline(1, 6, 3, WARM[3]);   // 左扶手
++  img.rect(12, 6, 3, 13, WARM[1]); img.hline(12, 6, 3, WARM[3]); // 右扶手
++  cloth(img, 4, 11, 8, 9, WARM, 2);                 // 坐垫
++  img.rect(4, 11, 8, 1, WARM[3]);
++  img.rect(2, 19, 12, 3, WARM[0]);                  // 前缘
++  img.rect(2, 21, 2, 3, W[1]); img.rect(12, 21, 2, 3, W[1]);
++  return f(img, 1, 1);
++}
++
++/* ────────────────────────── 桌与箱柜 ────────────────────────── */
++
++/** 茶几（2×1 格）：矮、台面薄、四条腿，上面放一本杂志和一只杯子 */
++export function coffee(): Furn {
++  const img = new Img(32, 22);
++  img.rect(2, 12, 2, 8, W[1]); img.rect(28, 12, 2, 8, W[1]);   // 四条腿
++  img.rect(2, 12, 1, 8, W[0]); img.rect(29, 12, 1, 8, W[0]);
++  img.rect(3, 15, 26, 2, W[1]); img.hline(3, 15, 26, W[2]);    // 下层板
++  img.rect(0, 8, 32, 4, W[2]);                                 // 台面
++  img.rect(0, 8, 32, 1, W[4]);
++  img.rect(1, 9, 30, 1, W[3]);
++  img.rect(0, 11, 32, 1, W[0]);
++  // 桌面杂物：杂志 + 杯子
++  img.rect(4, 4, 9, 4, hex('#f4efe0')); img.rect(4, 4, 9, 1, hex('#c4503c'));
++  img.rect(5, 6, 7, 1, hex('#b2b8c6'));
++  img.rect(20, 4, 4, 4, CREAM[1]); img.rect(20, 4, 4, 1, CREAM[2]); img.rect(23, 6, 1, 2, CREAM[0]);
++  img.rect(19, 8, 6, 1, CREAM[0]);
++  return f(img, 2, 1);
++}
++
++/** 电视柜 + 电视（2×1 格）：柜体两门，屏幕上有一点冷光 */
++export function tvset(): Furn {
++  const img = new Img(32, 34);
++  img.rect(3, 0, 26, 17, M[0]);                     // 机身
++  img.rect(4, 1, 24, 14, M[1]);
++  img.rect(5, 2, 22, 12, hex('#20303f'));           // 屏幕
++  img.rect(6, 3, 20, 4, hex('#2f4b60'));
++  img.rect(8, 4, 6, 2, hex('#7fc4d8'));             // 反光
++  img.rect(14, 16, 4, 4, M[1]);                     // 支架
++  img.rect(2, 19, 28, 11, W[1]);                    // 柜体
++  img.rect(2, 19, 28, 3, W[3]); img.hline(2, 19, 28, W[4]);
++  img.rect(4, 23, 11, 6, W[2]); img.rect(17, 23, 11, 6, W[2]);
++  img.hline(8, 25, 3, M[3]); img.hline(21, 25, 3, M[3]); // 拉手
++  return f(img, 2, 1);
++}
++
++/** 鞋架（1×1 格）：两层，摆两双鞋 */
++export function shoe(): Furn {
++  const img = new Img(16, 24);
++  img.rect(0, 4, 16, 2, W[2]); img.rect(0, 13, 16, 2, W[2]);
++  img.hline(0, 4, 16, W[3]); img.hline(0, 13, 16, W[3]);
++  img.rect(0, 4, 2, 18, W[2]); img.rect(14, 4, 2, 18, W[2]);
++  img.vline(1, 4, 18, W[3]);
++  for (const x of [2, 9]) {                          // 上层：运动鞋
++    img.rect(x, 8, 5, 3, hex('#e8e4da')); img.rect(x, 10, 5, 2, hex('#cfc7b2'));
++    img.rect(x, 10, 5, 1, hex('#8b8890')); img.rect(x + 1, 8, 3, 2, hex('#3f73ab'));
++  }
++  for (const x of [2, 9]) {                          // 下层：布鞋
++    img.rect(x, 17, 5, 3, WARM[1]); img.rect(x, 19, 5, 2, WARM[0]);
++    img.rect(x + 1, 17, 3, 1, WARM[3]);
++  }
++  return f(img, 1, 1);
++}
++
++/** 洗衣机（1×1 格）：上面板 + 圆形玻璃门 */
++export function washer(): Furn {
++  const img = new Img(16, 24);
++  img.rect(0, 2, 16, 22, PAL.white[2]);
++  img.rect(0, 2, 16, 3, PAL.white[4]);
++  img.hline(0, 4, 16, PAL.white[1]);
++  img.rect(2, 6, 12, 4, PAL.white[3]);              // 控制面板
++  img.rect(3, 7, 2, 2, hex('#c4503c')); img.rect(6, 7, 2, 2, hex('#3f9a58'));
++  img.ellipse(8, 16, 4.5, 4.5, M[2]);               // 门框
++  img.ellipse(8, 16, 3.5, 3.5, GLASS[1]);
++  img.ellipse(7, 15, 1.5, 1.5, GLASS[3]);
++  return f(img, 1, 1);
++}
++
++/* ────────────────────────── 灯 ────────────────────────── */
++
++/** 落地灯（1×1 格）：梯形灯罩 + 细杆 + 圆盘底座 */
++export function floorlamp(): Furn {
++  const img = new Img(16, 36);
++  for (let i = 0; i < 9; i++) {                      // 灯罩：上窄下宽
++    const inset = Math.max(0, 4 - Math.floor(i * 0.45));
++    img.rect(inset, 2 + i, 16 - inset * 2, 1, i < 7 ? CREAM[1] : CREAM[0]);
++  }
++  img.hline(4, 2, 8, CREAM[2]);
++  for (let i = 0; i < 9; i++) { const inset = Math.max(0, 4 - Math.floor(i * 0.45)); img.set(inset, 2 + i, CREAM[0]); img.set(15 - inset, 2 + i, CREAM[0]); }
++  img.rect(5, 4, 6, 5, PAL.lampGlow);                // 罩里的暖光
++  img.rect(6, 4, 4, 3, hex('#fff6d0'));
++  img.ellipse(8, 11.5, 5, 1.2, PAL.lampGlow);        // 罩下漏光
++  img.rect(7, 12, 2, 19, M[1]);                      // 杆
++  img.vline(7, 12, 19, M[3]);
++  img.ellipse(8, 32, 5, 2, M[2]);                    // 底座
++  img.ellipse(8, 31.5, 4, 1.2, M[3]);
++  return f(img, 1, 1);
++}
++
++/** 台灯（摆桌面上的小件，不占地）：小梯形灯罩 + 底座 */
++export function desklamp(): Furn {
++  const img = new Img(11, 14);
++  img.rect(3, 11, 5, 1, M[1]); img.ellipse(5, 11, 3, 1, M[2]);
++  img.rect(5, 7, 1, 4, M[1]);
++  for (let i = 0; i < 5; i++) { const inset = Math.max(0, 2 - Math.floor(i * 0.5)); img.rect(1 + inset, 2 + i, 9 - inset * 2, 1, CREAM[1]); }
++  img.rect(2, 2, 7, 1, CREAM[2]);
++  img.rect(3, 3, 5, 3, PAL.lampGlow);
++  img.rect(4, 3, 3, 2, hex('#fff6d0'));
++  return f(img, 1, 1);   // 桌面小件：top 标记在 HOME_INFO 里
++}
++
++/* ────────────────────────── 地毯（不挡路） ────────────────────────── */
++
++/** 大地毯（3×2 格）：平铺在地上、不挡路。故意不加描边——加了就像挂了一幅画 */
++export function rug(): Furn {
++  const img = new Img(48, 32);
++  img.rect(0, 0, 48, 32, WARM[2]);                   // 底色
++  img.rect(0, 0, 48, 1, WARM[1]); img.rect(0, 31, 48, 1, WARM[1]);
++  img.rect(0, 0, 1, 32, WARM[1]); img.rect(47, 0, 1, 32, WARM[1]);
++  img.rect(2, 2, 44, 28, WARM[3]);                   // 内圈亮边
++  img.rect(3, 3, 42, 26, WARM[2]);
++  img.rect(3, 3, 42, 1, WARM[1]); img.rect(3, 28, 42, 1, WARM[1]);
++  for (const cx of [13, 24, 35]) {                   // 三个菱形花纹
++    for (let dy = -4; dy <= 4; dy++) {
++      const w = 9 - Math.abs(dy) * 2;
++      img.hline(cx - Math.floor(w / 2), 16 + dy, w, WARM[3]);
++    }
++    for (let dy = -2; dy <= 2; dy++) {
++      const w = 5 - Math.abs(dy) * 2;
++      img.hline(cx - Math.floor(w / 2), 16 + dy, w, WARM[1]);
++    }
++    img.rect(cx, 16, 1, 1, GOLD);
++  }
++  for (let y = 3; y < 30; y += 3) { img.rect(0, y, 1, 2, CREAM[1]); img.rect(47, y, 1, 2, CREAM[1]); } // 两端流苏
++  return { img, fw: 3, fh: 2, flat: true };          // 不 outlined()
++}
++
++/* ────────────────────────── 墙上的 ────────────────────────── */
++
++/** 挂钟（墙面挂件）：木框 + 表盘 + 指针 */
++export function wallclock(): Furn {
++  const img = new Img(16, 16);
++  img.ellipse(7.5, 7.5, 7, 7, W[2]);
++  img.ellipse(7.5, 7.5, 6, 6, CREAM[2]);
++  img.ellipse(7.5, 7.5, 5, 5, hex('#fbf8ee'));
++  img.rect(7, 3, 1, 5, OUT); img.rect(7, 7, 4, 1, OUT);  // 指针
++  img.rect(7, 7, 1, 1, hex('#c4503c'));
++  for (let a = 0; a < 12; a++) {                     // 刻度
++    const ang = (a / 12) * Math.PI * 2, x = 7.5 + Math.cos(ang) * 4.2, y = 7.5 + Math.sin(ang) * 4.2;
++    img.set(Math.round(x), Math.round(y), a % 3 === 0 ? OUT : W[2]);
++  }
++  return f(img, 1, 0);
++}
++
++/** 海报（墙面挂件）：竖排的风景小画 */
++export function poster(): Furn {
++  const img = new Img(14, 18);
++  img.rect(0, 0, 14, 18, W[3]);
++  img.rect(2, 2, 10, 14, hex('#f2e7c8'));
++  img.rect(3, 3, 8, 7, hex('#8fc3ea'));              // 天
++  img.rect(3, 8, 8, 4, hex('#52973f'));              // 地
++  img.rect(3, 7, 8, 1, hex('#3f7a4f'));
++  img.rect(5, 5, 3, 3, hex('#f6e05a'));              // 太阳
++  img.rect(4, 12, 6, 1, hex('#7a5233'));
++  img.rect(4, 14, 4, 1, hex('#7a5233'));
++  return f(img, 1, 0);
++}
++
++/* ────────────────────────── 绿植 / 水族 ────────────────────────── */
++
++/** 大盆栽（1×1 格）：陶盆 + 五片分开的叶子（每片单独压暗，避免糊成一团） */
++export function potplant(): Furn {
++  const img = new Img(16, 34);
++  img.rect(4, 26, 8, 8, hex('#b06a44'));             // 陶盆
++  img.rect(3, 26, 10, 2, hex('#c47c50'));
++  img.rect(5, 33, 6, 1, hex('#93512f'));
++  img.vline(4, 27, 6, hex('#93512f'));
++  const leaf = (cx: number, cy: number, rx: number, ry: number) => {
++    img.ellipse(cx, cy, rx, ry, L[1]);
++    img.ellipse(cx - 0.5, cy - 0.6, rx - 0.8, ry - 0.8, L[2]);
++    img.ellipse(cx - 1, cy - 1.2, rx - 2, ry - 2, L[3]);
++  };
++  leaf(8, 5, 4, 5);       // 顶
++  leaf(4.5, 12, 3.6, 5);  // 左
++  leaf(11.5, 12, 3.6, 5); // 右
++  leaf(6.5, 19, 3.2, 4.5); // 左下
++  leaf(9.5, 19, 3.2, 4.5); // 右下
++  img.rect(7, 20, 1, 7, L[0]);                        // 主干
++  img.rect(6, 24, 2, 2, L[1]);
++  return f(img, 1, 1);
++}
++
++/** 桌面小盆栽（不占地） */
++export function splant(): Furn {
++  const img = new Img(9, 12);
++  img.rect(2, 8, 5, 3, hex('#b06a44'));
++  img.rect(1, 8, 7, 1, hex('#c47c50'));
++  img.ellipse(4.5, 5, 3, 2.6, L[1]);
++  img.ellipse(4, 4.4, 2.2, 1.9, L[2]);
++  img.ellipse(3.6, 4, 1.2, 1, L[3]);
++  img.ellipse(6.5, 6, 1.4, 1.2, L[2]);
++  return f(img, 1, 1);   // 桌面小件，同上
++}
++
++/** 鱼缸（2×1 格）：玻璃缸 + 底砂 + 两条小鱼 + 水草，可以走近看 */
++export function aquarium(): Furn {
++  const img = new Img(32, 28);
++  img.rect(1, 1, 30, 22, GLASS[1]);
++  img.rect(2, 2, 28, 20, GLASS[2]);
++  img.rect(3, 3, 26, 14, hex('#5fb6c8'));            // 水色
++  img.rect(3, 17, 26, 5, hex('#c9b58a'));            // 底砂
++  for (let x = 4; x < 28; x += 3) img.set(x, 17, hex('#e0cfa4'));
++  img.rect(6, 11, 1, 6, L[2]); img.rect(7, 10, 1, 7, L[3]); img.rect(5, 12, 1, 5, L[1]); // 水草
++  img.rect(24, 9, 4, 2, hex('#e0a53a')); img.rect(23, 9, 1, 2, hex('#f2c764'));           // 小鱼1
++  img.rect(12, 14, 3, 2, hex('#c4503c')); img.rect(15, 14, 1, 1, hex('#c4503c'));         // 小鱼2
++  img.hline(2, 2, 28, GLASS[3]);                     // 水面反光
++  img.rect(0, 23, 32, 5, W[1]);                      // 木底座
++  img.hline(0, 23, 32, W[3]);
++  return f(img, 2, 1);
++}
++
++/* ────────────────────────── 其他 ────────────────────────── */
++
++/** 壁炉（2×1 格）：砖砌炉体 + 柴火 + 三层火苗 */
++export function fireplace(): Furn {
++  const img = new Img(32, 40);
++  img.rect(0, 0, 32, 4, hex('#8b8890'));             // 石台面
++  img.hline(0, 0, 32, hex('#b9b5b3'));
++  img.rect(0, 4, 32, 1, hex('#6a6670'));
++  img.rect(2, 5, 28, 27, BRICK[1]);                  // 砖体
++  for (let y = 5; y < 32; y += 4) img.hline(2, y, 28, BRICK[0]);
++  for (let y = 6; y < 32; y += 8) { img.rect(10, y, 1, 4, BRICK[0]); img.rect(20, y, 1, 4, BRICK[0]); }
++  img.rect(6, 11, 20, 21, hex('#241a19'));           // 炉膛
++  img.rect(7, 12, 18, 19, hex('#33231f'));
++  img.rect(11, 28, 10, 3, hex('#5a3a24')); img.rect(11, 28, 10, 1, hex('#7a5233')); // 柴火
++  img.rect(13, 26, 8, 2, hex('#43291a'));
++  img.rect(10, 24, 12, 4, hex('#c25c2a'));           // 火苗：底宽上窄
++  img.rect(11, 21, 10, 4, hex('#e8923a'));
++  img.rect(12, 18, 8, 4, hex('#f6d06a'));
++  img.rect(14, 15, 4, 4, hex('#fff0b0'));
++  img.rect(15, 12, 2, 4, hex('#fff0b0'));
++  img.rect(4, 32, 24, 3, hex('#8b8890'));            // 炉前石板
++  img.hline(4, 32, 24, hex('#b9b5b3'));
++  return f(img, 2, 1);
++}
++
++/** 穿衣镜（1×1 格）：木框 + 斜向反光的镜面，底下两只小脚 */
++export function mirror(): Furn {
++  const img = new Img(16, 34);
++  img.rect(3, 0, 10, 4, W[2]);                       // 顶部小拱
++  img.ellipse(8, 3, 5, 2, W[2]);
++  img.rect(2, 3, 12, 28, W[2]);                      // 外框
++  img.vline(2, 3, 28, W[3]); img.vline(13, 3, 28, W[1]);
++  img.rect(4, 5, 8, 24, GLASS[1]);                   // 镜面
++  img.rect(5, 6, 6, 22, GLASS[2]);
++  for (let i = 0; i < 2; i++) {                      // 两道斜向反光（柔一点，别像闪电）
++    for (let y = 9 + i * 10; y < 17 + i * 10; y++) {
++      const x = 6 + Math.floor((y - (9 + i * 10)) * 0.5);
++      img.rect(x, y, 2, 1, hex('#a8d8ee'));
++    }
++  }
++  img.rect(3, 29, 3, 3, W[1]); img.rect(10, 29, 3, 3, W[1]);   // 小脚
++  return f(img, 1, 1);
++}
++
++/** 猫窝（1×1 格）：藤编圆垫 + 蜷着的小猫（头、两只耳朵、尾巴都看得见） */
++export function catbed(): Furn {
++  const img = new Img(16, 16);
++  img.ellipse(8, 9, 7.5, 5.6, WARM[1]);              // 藤编外圈
++  img.ellipse(8, 8.6, 6.8, 4.9, WARM[2]);
++  img.ellipse(8, 9.6, 5.6, 3.6, CREAM[0]);           // 垫子
++  img.ellipse(8, 10.2, 4.8, 2.8, CREAM[1]);
++  // 猫身（深一点当轮廓，里面压亮）
++  img.ellipse(7, 10, 3.4, 2.2, hex('#a8622f'));
++  img.ellipse(7, 9.9, 2.8, 1.7, hex('#d08a4a'));
++  // 头枕在右边，两只耳朵 + 一条闭着的眼
++  img.ellipse(10.2, 7.6, 2.2, 2, hex('#a8622f'));
++  img.ellipse(10.2, 7.5, 1.7, 1.5, hex('#e8a862'));
++  img.rect(8, 5, 1, 2, hex('#a8622f')); img.rect(11, 5, 1, 2, hex('#a8622f'));
++  img.rect(8, 5, 1, 1, hex('#e8a862')); img.rect(11, 5, 1, 1, hex('#e8a862'));
++  img.hline(9, 8, 2, hex('#3b322c'));                // 闭着的眼
++  img.set(11, 9, hex('#c08a86'));                    // 鼻尖
++  // 尾巴绕着垫子边
++  img.rect(2, 11, 1, 2, hex('#a8622f')); img.rect(3, 12, 3, 1, hex('#a8622f'));
++  return f(img, 1, 1);
++}
++
++/* ────────────────────────── 目录 ────────────────────────── */
++
++export const HOME_FURNITURE: Record<string, () => Furn> = {
++  couch, armchair, coffee, tvset, shoe, washer,
++  floorlamp, desklamp, rug,
++  wallclock, poster,
++  potplant, splant, aquarium,
++  fireplace, mirror, catbed,
++};
++
++/** 中文名 + 分类（编辑器目录用；分类按星露谷那种"按用途"分） */
++export const HOME_INFO: Record<string, { name: string; cat: string; top?: boolean }> = {
++  couch: { name: '青绿沙发(3格)', cat: '坐具' },
++  armchair: { name: '单人扶手椅', cat: '坐具' },
++  coffee: { name: '木茶几', cat: '桌柜' },
++  tvset: { name: '电视柜+电视', cat: '桌柜' },
++  shoe: { name: '鞋架', cat: '桌柜' },
++  washer: { name: '洗衣机', cat: '家电' },
++  floorlamp: { name: '落地灯', cat: '灯具' },
++  desklamp: { name: '台灯', cat: '灯具', top: true },
++  rug: { name: '花纹地毯(3×2)', cat: '地毯' },
++  wallclock: { name: '挂钟', cat: '墙面' },
++  poster: { name: '风景海报', cat: '墙面' },
++  potplant: { name: '大盆栽', cat: '绿植' },
++  splant: { name: '小盆栽', cat: '绿植', top: true },
++  aquarium: { name: '鱼缸', cat: '绿植' },
++  fireplace: { name: '壁炉', cat: '其他' },
++  mirror: { name: '穿衣镜', cat: '其他' },
++  catbed: { name: '猫窝', cat: '其他' },
++};
+diff --git a/tools/art/preview-furniture.ts b/tools/art/preview-furniture.ts
+new file mode 100644
+index 0000000..57557a1
+--- /dev/null
++++ b/tools/art/preview-furniture.ts
+@@ -0,0 +1,44 @@
++/**
++ * 家具预览图：把家具按 2 倍放大排成一张图，方便肉眼检查像素（不参与游戏构建）。
++ *   npx tsx tools/art/preview-furniture.ts [输出路径]
++ */
++import { writeFileSync } from 'node:fs';
++import { join } from 'node:path';
++import { Img, type RGBA } from './px.ts';
++import { HOME_FURNITURE } from './furniture-home.ts';
++import { DORM_FURNITURE } from './furniture-dorm.ts';
++import { FURNITURE } from './furniture.ts';
++import { OFFICE_FURNITURE } from './furniture-office.ts';
++import { ROOT } from '../paths.ts';
++
++const SCALE = 3, GAP = 10, MAXW = 720, PAD = 10;
++const bg: RGBA = [238, 232, 218, 255];
++
++const sets: [string, Record<string, () => { img: Img }>][] = [
++  ['home', HOME_FURNITURE], ['dorm', DORM_FURNITURE], ['furniture', FURNITURE], ['office', OFFICE_FURNITURE],
++];
++
++const items = sets.flatMap(([, m]) => Object.entries(m).map(([k, mk]) => ({ k, img: mk().img })));
++// 逐行摆：宽 720，放不下就换行
++let x = PAD, y = PAD, rowH = 0, totalH = PAD;
++const pos: { x: number; y: number; img: Img }[] = [];
++for (const it of items) {
++  const w = it.img.w * SCALE, h = it.img.h * SCALE;
++  if (x + w + PAD > MAXW) { x = PAD; y += rowH + GAP; rowH = 0; }
++  pos.push({ x, y, img: it.img });
++  x += w + GAP; rowH = Math.max(rowH, h);
++}
++totalH = y + rowH + PAD;
++
++const out = new Img(MAXW, totalH);
++out.rect(0, 0, MAXW, totalH, bg);
++for (const p of pos) {
++  for (let yy = 0; yy < p.img.h; yy++) for (let xx = 0; xx < p.img.w; xx++) {
++    const c = p.img.get(xx, yy); if (!c[3]) continue;
++    for (let sy = 0; sy < SCALE; sy++) for (let sx = 0; sx < SCALE; sx++) out.set(p.x + xx * SCALE + sx, p.y + yy * SCALE + sy, c);
++  }
++}
++const dst = process.argv[2] ? process.argv[2] : join(ROOT, 'ref', 'furniture-preview.png');
++await out.save(dst);
++writeFileSync(join(ROOT, 'ref', 'furniture-preview.txt'), pos.map((p) => p.img.w).join(','));
++console.log('已生成', dst, `${MAXW}x${totalH}`, '件数', pos.length);

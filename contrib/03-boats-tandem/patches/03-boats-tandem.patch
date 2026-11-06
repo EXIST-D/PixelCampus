@@ -1,0 +1,824 @@
+diff --git a/src/entities/RemotePlayer.ts b/src/entities/RemotePlayer.ts
+index 237c1f7..eca06cd 100644
+--- a/src/entities/RemotePlayer.ts
++++ b/src/entities/RemotePlayer.ts
+@@ -23,7 +23,7 @@ export class RemotePlayer extends Character {
+     if (info.look !== this.look || !sameApp(info.app, this.appRef)) this.setLook(info.look, info.app);
+     this.setNameTag(info.name, `hsl(${hueOf(info.name)} 75% 84%)`);
+   }
+-  applyTitle(id?: string) { const t = titleDef(id); this.setTitle(t ? { name: t.name, color: t.color } : undefined); }
++  applyTitle(id?: string) { const t = titleDef(id); this.setTitle(t ? { name: t.name, color: t.color, rainbow: t.rainbow } : undefined); }
+   push(x: number, y: number, flags: number, t: number) {
+     this.buf.push({ t, x, y, flags });
+     if (this.buf.length > 8) this.buf.shift();
+@@ -34,7 +34,8 @@ export class RemotePlayer extends Character {
+     if (f.sit) this.setSitting(true, RemotePlayer.findSeat?.(x, y)); else this.setSitting(false);
+     if (f.fish !== this.fishing) this.setFishing(f.fish);
+     if (f.pax !== this.pax) this.setPassenger(f.pax); // 坐在队友车后座
+-    this.setRiding(f.ride); // 别人骑着共享单车：同样的两层车 + 上半身
++    this.paxOnTandem = f.tandem && f.pax; // 坐在双人车后座：画得比共享单车更靠后
++    this.setRiding(f.ride, f.boat ? 'boat' : f.tandem ? 'tandem' : 'bike'); // 别人骑的车/划的船：同样的两层车身 + 上半身
+     this.running = f.run && f.moving;
+   }
+   /** 每帧调用：把位置插值到"现在 - INTERP_MS"那一刻 */
+diff --git a/src/shared/bikes.ts b/src/shared/bikes.ts
+index 20e610a..c6198eb 100644
+--- a/src/shared/bikes.ts
++++ b/src/shared/bikes.ts
+@@ -37,4 +37,26 @@ export const BIKE_DROP_MAX = 60;
+ export const BIKE_DROP_MERGE_PX = 14;
+ /** 车停在玩家脚边：沿朝向方向偏多少像素 */
+ export const BIKE_DROP_SIDE_PX = 12;
+-export interface DroppedBike { id: number; x: number; y: number; flip: boolean }
++export interface DroppedBike { id: number; x: number; y: number; flip: boolean; /** 停的是什么车（画不同的车身）；不写就是普通共享单车。boat = 湖上的小船（不随时间消失） */ k?: 'tandem' | 'boat' }
++
++// ------------------------------------------------------------ 双人自行车（tandem）
++/**
++ * 双人车：校园里固定停着几辆（图书馆广场两辆、南门前广场两辆），走近按 E 就能骑。
++ * 和共享单车比：更快（×1.18）、后座不用组队（谁都能坐上来一起逛校园）。
++ * 位置写死（像素坐标 = 车的脚点），客户端据此摆车，服务器据此判断"上车时是不是真的在车旁边"。
++ */
++export const TANDEM_SPEED_MULT = 1.18;
++/** 骑/划的是什么：共享单车 / 双人自行车 / 湖上的小船 */
++export type RideKind = 'bike' | 'tandem' | 'boat';
++/** 是不是水上的船（速度更慢、只能在水里走、下车时船留在水面上） */
++export const isBoat = (k: RideKind) => k === 'boat';
++/** 双人车后座可以坐多远的人（服务器校验，留出位置延迟余量） */
++export const TANDEM_PAX_REACH = 110;
++export interface TandemSpot { x: number; y: number; flip: boolean }
++export function tandemSpots(): TandemSpot[] {
++  return [
++    { x: 5744, y: 6272, flip: false }, { x: 5840, y: 6272, flip: true }, // 图书馆广场（东西两侧）
++    { x: 5718, y: 7891, flip: false }, { x: 5814, y: 7891, flip: true }, // 南门前广场
++  ];
++}
++
+diff --git a/src/shared/boat.ts b/src/shared/boat.ts
+new file mode 100644
+index 0000000..39cec1c
+--- /dev/null
++++ b/src/shared/boat.ts
+@@ -0,0 +1,90 @@
++/**
++ * 精工湖的小木船（划艇）。它不占背包、也不进存档：每个世界里湖东南岸的水面上停着一条，
++ * 本质上是「一条留在水上的车」——谁都能划走，划完停在原地，不会自己消失。
++ *
++ * 规则：
++ *  · 岸边走近按 E 上船；上船后**只能在湖水里走**（划不上岸、也出不了湖），按 E 靠岸下船；
++ *  · 比共享单车慢一半（走路的 2.5 倍），急转弯会掉速；
++ *  · 在湖心离岸太远时下不了船（要先划回岸边）；
++ *  · 船上的位置就是船心，所以别人的画面里看到的是「一个人坐在船里」。
++ */
++
++/** 小船的速度：相对共享单车（0.5 = 单车的一半，走路的 2.5 倍） */
++export const BOAT_SPEED_MULT = 0.5;
++/** 站在岸边多近能上船（像素） */
++export const BOAT_REACH = 46;
++/** 下船时最多往外找多远能上岸（像素）；超过这个距离说明还在湖心，不让下 */
++export const BOAT_LAND_REACH = 58;
++/** 每个世界的湖上放几条船：几处停船点散在湖岸，谁都能就近上船（在线人多，4 条不够抢） */
++export const BOAT_COUNT = 7;
++/**
++ * 小船"自己漂回停船点"的时间：船停在谁都能走到的地方时 5 分钟归位；
++ * 被丢在湖心（四周 58 像素内没有岸，谁都够不到）时 60 秒就归位。
++ * 不做这件事的话，有人划到湖心直接下线/传送，那条船就永远躺在湖中间了。
++ */
++export const BOAT_HOME_MS = 300_000;
++export const BOAT_STRANDED_MS = 60_000;
++/** 离停船点多近算"已经停在原位"（不用再挪，只续时间） */
++export const BOAT_HOME_PX = 40;
++/** 划船时一秒最多上报多少次（和骑行一样按 30 Hz） */
++export const BOAT_REPORT_HZ = 30;
++
++/**
++ * 在湖边找几个能停船的角落：每个都是"四邻里有一格能站人"的水格，离湖心 6 格到 maxR 的 7 成之间。
++ * 选的时候先挑离湖心近的，并且彼此至少隔开 minGap 格（几处停船点散在湖岸上，不会挤成一堆）。
++ * 地图换了也能自己找到位置。
++ */
++export function findMoors(
++  isWater: (tx: number, ty: number) => boolean,
++  isLand: (tx: number, ty: number) => boolean,
++  lake: { x: number; y: number },
++  count = 7, tile = 16, maxR = 70, minGap = 14,
++): { x: number; y: number }[] {
++  const cands: { tx: number; ty: number; score: number }[] = [];
++  for (let ty = Math.floor(lake.y - maxR); ty <= lake.y + maxR; ty++) {
++    for (let tx = Math.floor(lake.x - maxR); tx <= lake.x + maxR; tx++) {
++      if (!isWater(tx, ty)) continue;
++      // 旁边得有一格能站人，不然上不了船
++      const shore = [[0, 1], [1, 0], [-1, 0], [0, -1]].some(([dx, dy]) => isLand(tx + dx, ty + dy));
++      if (!shore) continue;
++      const d = Math.hypot(tx + 0.5 - lake.x, ty + 0.5 - lake.y);
++      if (d < 6 || d > maxR * 0.7) continue;
++      cands.push({ tx, ty, score: d - (ty > lake.y ? 0.6 : 0) }); // 同距离优先南岸（人常走的一侧）
++    }
++  }
++  cands.sort((a, b) => a.score - b.score);
++  const picked: { tx: number; ty: number }[] = [];
++  for (const c of cands) {
++    if (picked.length >= count) break;
++    if (picked.every((p) => Math.hypot(p.tx - c.tx, p.ty - c.ty) >= minGap)) picked.push({ tx: c.tx, ty: c.ty });
++  }
++  return picked.map((p) => ({ x: p.tx * tile + tile / 2, y: p.ty * tile + tile / 2 }));
++}
++
++/** 只要一处停船点（测试和"找一条船"的地方用） */
++export function findMoor(
++  isWater: (tx: number, ty: number) => boolean,
++  isLand: (tx: number, ty: number) => boolean,
++  lake: { x: number; y: number },
++  tile = 16, maxR = 70,
++): { x: number; y: number } | null {
++  return findMoors(isWater, isLand, lake, 1, tile, maxR)[0] ?? null;
++}
++
++/**
++ * 找一个能上岸的落脚点：从 (x,y) 往外一圈圈试，第一个「不挡」的像素点就是岸边。
++ * blocked 由调用方给（客户端用 WorldMap.boxBlocked，服务器用同一张碰撞图）。
++ * 船停在湖心（四周全是水）就返回 null —— 调用方据此拒绝下船。
++ */
++export function landNear(blocked: (x: number, y: number) => boolean, x: number, y: number, reach = BOAT_LAND_REACH): { x: number; y: number } | null {
++  if (!blocked(x, y)) return { x: Math.round(x), y: Math.round(y) };
++  for (let r = 6; r <= reach; r += 5) {
++    const n = Math.max(12, Math.round(r * 1.1));
++    for (let i = 0; i < n; i++) {
++      const a = (i / n) * Math.PI * 2 - Math.PI / 2; // 从正上方开始转一圈：优先最近的岸
++      const px = Math.round(x + Math.cos(a) * r), py = Math.round(y + Math.sin(a) * r);
++      if (!blocked(px, py)) return { x: px, y: py };
++    }
++  }
++  return null;
++}
+diff --git a/tests/boat.test.ts b/tests/boat.test.ts
+new file mode 100644
+index 0000000..ea09076
+--- /dev/null
++++ b/tests/boat.test.ts
+@@ -0,0 +1,261 @@
++import { describe, it, expect, afterEach } from 'vitest';
++import { existsSync, readFileSync } from 'node:fs';
++import { join } from 'node:path';
++import WebSocket from 'ws';
++import { startServer } from '../server/index';
++import { PlayerStore } from '../server/store';
++import { FLAG_BOAT, FLAG_RIDE, PROTOCOL_VERSION, encodeReport, packFlags, unpackFlags, type ServerMsg } from '../src/shared/protocol';
++import { validateProfile } from '../src/shared/profile';
++import { BOAT_COUNT, BOAT_HOME_MS, BOAT_LAND_REACH, BOAT_SPEED_MULT, BOAT_STRANDED_MS, findMoor, findMoors, landNear } from '../src/shared/boat';
++import { lakeMask } from '../src/shared/water';
++import { WorldMap } from '../src/world/WorldMap';
++
++describe('小船 · 规则', () => {
++  it('离岸太远就上不了岸（找不到落脚点）；岸边能找到、而且找的是最近的岸', () => {
++    // 湖心一大片水：往哪儿走 58 像素都是水 → 下不了船
++    const allWater = () => true;
++    expect(landNear(allWater, 500, 500)).toBeNull();
++    // 水/陆分界在 x = 1000（左边水、右边陆）
++    const map = (x: number) => x < 1000;
++    const spot = landNear(map, 970, 300)!;
++    expect(spot).toBeTruthy();
++    expect(map(spot.x)).toBe(false);              // 落点是陆地
++    expect(spot.x - 970).toBeLessThanOrEqual(BOAT_LAND_REACH); // 没跑太远
++    expect(landNear(map, 1020, 300)).toEqual({ x: 1020, y: 300 }); // 本来就在岸上
++  });
++
++  it('停船点有 4 处，彼此隔开（船散在湖岸，不会挤成一堆）；船比共享单车慢一半', () => {
++    const isWater = (tx: number, ty: number) => tx > 5 && tx < 65 && ty > 5 && ty < 65;
++    const isLand = (tx: number, ty: number) => !isWater(tx, ty);
++    const ms = findMoors(isWater, isLand, { x: 35, y: 35 }, BOAT_COUNT);
++    expect(ms.length).toBeGreaterThanOrEqual(4); // 一圈岸边能放几条就几条
++    for (const a of ms) for (const b of ms) if (a !== b) expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThanOrEqual(14 * 16 - 1);
++    for (const m of ms) expect(isWater(Math.floor(m.x / 16), Math.floor(m.y / 16))).toBe(true);
++    expect(BOAT_SPEED_MULT).toBeLessThan(1);
++  });
++
++  it('停船点：湖里、旁边能站人、离湖心不太远；船比共享单车慢一半', () => {
++    const isWater = (tx: number, ty: number) => tx > 10 && tx < 30 && ty > 10 && ty < 30;
++    const isLand = (tx: number, ty: number) => !isWater(tx, ty);
++    const m = findMoor(isWater, isLand, { x: 20, y: 20 })!;
++    expect(m).toBeTruthy();
++    expect(isWater(Math.floor(m.x / 16), Math.floor(m.y / 16))).toBe(true);
++    const around = [[0, 1], [0, -1], [1, 0], [-1, 0]].map(([dx, dy]) => isLand(Math.floor(m.x / 16) + dx, Math.floor(m.y / 16) + dy));
++    expect(around.some(Boolean)).toBe(true); // 旁边有陆地（能走上去上船）
++    expect(findMoor(() => false, isLand, { x: 20, y: 20 })).toBeNull(); // 没水就没有停船点
++    expect(BOAT_SPEED_MULT).toBeLessThan(1); // 比车慢
++  });
++});
++
++describe.skipIf(!existsSync(join(__dirname, '..', 'public', 'assets', 'generated', 'world.json')))('小船 · 真实校园地图', () => {
++  it('精工湖找得到 4 处停船点：都停在水面上、岸边一格能站人、彼此散开', () => {
++    const w = JSON.parse(readFileSync(join(__dirname, '..', 'public', 'assets', 'generated', 'world.json'), 'utf8'));
++    const map = new WorldMap({ width: w.width, height: w.height, collision: w.collision });
++    const mask = lakeMask(w.waterRuns, w.width, w.height, w.pois)!;
++    const lake = w.pois.find((p: { id: string }) => p.id === 'lake')!;
++    const moor = findMoor((tx, ty) => mask.tileWater(tx, ty), (tx, ty) => !map.tileBlocked(tx, ty), lake)!;
++    expect(moor).toBeTruthy();
++    expect(mask.at(moor.x, moor.y)).toBe(true);                       // 船在水里
++    expect(map.boxBlocked(moor.x, moor.y)).toBe(true);                // （水格是挡人的，所以人走不过去）
++    expect(landNear((x, y) => map.boxBlocked(x, y), moor.x, moor.y)).toBeTruthy(); // 岸边站得住，上得了船
++
++    const all = findMoors((tx, ty) => mask.tileWater(tx, ty), (tx, ty) => !map.tileBlocked(tx, ty), lake, BOAT_COUNT);
++    expect(all).toHaveLength(BOAT_COUNT);
++    for (const m of all) {
++      expect(mask.at(m.x, m.y), `${m.x},${m.y} 不在水里`).toBe(true);
++      expect(landNear((x, y) => map.boxBlocked(x, y), m.x, m.y)).toBeTruthy();
++    }
++    for (const a of all) for (const b of all) if (a !== b) expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThan(13 * 16);
++  });
++});
++
++// ---------------------------------------------------------------- 服务器
++const W = 200;
++/** 一个小池塘：x 90..110、y 95..105 是水，周围全是空地 */
++const pondWorld = {
++  width: W, height: W, spawn: { x: 20, y: 20 },
++  pois: [{ id: 'lake', x: 100, y: 100 }],
++  waterRuns: Array.from({ length: 11 }, (_, i) => [95 + i, 90, 110] as [number, number, number]),
++  // 水格在碰撞图里是挡人的（和真实地图一样）：所以人走不进湖，船只能在水上漂
++  collision: Array.from({ length: W }, (_, ty) => Array.from({ length: W }, (_, tx) => (tx >= 90 && tx < 110 && ty >= 95 && ty <= 105 ? '1' : '0')).join('')),
++};
++const open: WebSocket[] = [];
++let srv: Awaited<ReturnType<typeof startServer>> | null = null;
++afterEach(async () => { for (const w of open.splice(0)) w.terminate(); await srv?.close(); srv = null; });
++const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
++async function client(port: number, name: string, token: string) {
++  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`); open.push(ws);
++  const msgs: ServerMsg[] = [];
++  ws.on('message', (d, bin) => { if (!bin) msgs.push(JSON.parse(d.toString()) as ServerMsg); });
++  await new Promise<void>((r, j) => { ws.on('open', () => r()); ws.on('error', j); });
++  const send = (m: unknown) => ws.send(JSON.stringify(m));
++  const wait = async <T extends ServerMsg['t']>(t: T, from = 0, ms = 4000, f: (m: Extract<ServerMsg, { t: T }>) => boolean = () => true) => { const end = Date.now() + ms; while (Date.now() < end) { const m = msgs.slice(from).find((x): x is Extract<ServerMsg, { t: T }> => x.t === t && f(x as Extract<ServerMsg, { t: T }>)); if (m) return m; await sleep(15); } throw new Error(`等不到 ${t}`); };
++  const r = validateProfile({ gender: 'f', look: 1, name, college: '机电学院', major: '机械设计', year: 2024 }); if (!r.ok) throw new Error(r.error);
++  send({ t: 'hello', v: PROTOCOL_VERSION, token, profile: r.profile });
++  const w = await wait('welcome');
++  return { ws, send, msgs, wait, uid: w.uid, id: w.id };
++}
++const G = () => (srv!.game as unknown as { byUid: Map<number, { x: number; y: number; flags: number; riding: boolean; rideKind: string; key: string }> }).byUid;
++
++describe('小船（服务器）', () => {
++  const tok = (k: string) => `boattoken${k}`.padEnd(24, k);
++  /** 岸上、紧挨着停船点那一格：船停在池塘南岸的水里（97,105），人站在 (97,106) 的格子中心 */
++  const shore = { x: 97 * 16 + 8, y: 106 * 16 + 8 };
++  const setup = async () => {
++    srv = await startServer({ port: 0, world: pondWorld, game: { mons: { gift: false } } });
++    srv.store.set(PlayerStore.key(tok('A')), { profile: { name: '划船', gender: 'f', look: 1, college: '机电学院', major: '机械设计', year: 2024 } as never, x: shore.x, y: shore.y, seen: Date.now(), inv: { fishing_rod: 1, bait: 20 } });
++    const c = await client(srv.port, '划船', tok('A'));
++    return c;
++  };
++
++  it('进世界就有船停在湖面上（池塘小，停船点少于 4 条也照常）；上岸走近按 E 就能划（位置挪到船上，flags 带"在划船"）', async () => {
++    const c = await setup();
++    const drops = await c.wait('bike_drops');
++    const boats = drops.list.filter((b) => b.k === 'boat');
++    expect(boats.length).toBeGreaterThanOrEqual(1);
++    const boat = boats.sort((a, b) => Math.hypot(a.x - shore.x, a.y - shore.y) - Math.hypot(b.x - shore.x, b.y - shore.y))[0];
++    expect(srv!.game.progress.inv(G().get(c.uid)!.key)).toBeTruthy();
++    c.msgs.length = 0; c.send({ t: 'ride', on: true });
++    const r = await c.wait('ride_result');
++    expect(r.ok).toBe(true); expect(r.kind).toBe('boat');
++    const p = G().get(c.uid)!;
++    expect(p.riding).toBe(true); expect(p.rideKind).toBe('boat');
++    expect(p.x).toBe(boat.x); expect(p.y).toBe(boat.y);                 // 人坐到船上
++    expect(unpackFlags(p.flags)).toMatchObject({ ride: true, boat: true, tandem: false });
++    // 划走的那条不再停在原处（别的船还在，被划走的这条不见了）
++    expect(srv!.game.dropped.list().filter((b) => b.k === 'boat')).toHaveLength(boats.length - 1);
++  });
++
++  it('划船只能在水上：往湖里划可以，往岸上划会被拉回', async () => {
++    const c = await setup();
++    await c.wait('bike_drops');
++    c.send({ t: 'ride', on: true }); await c.wait('ride_result', 0, 4000, (m) => m.ok);
++    const p = G().get(c.uid)!;
++    // 往湖里（-y 方向，北上）划：服务器接受
++    const y0 = p.y;
++    for (let i = 1; i <= 4; i++) { c.ws.send(encodeReport({ x: p.x, y: y0 - i * 6, flags: packFlags('up', true, false, true, false, false, false, true) })); await sleep(60); }
++    expect(p.y).toBeLessThan(y0);
++    // 往岸上（+y 方向，越过 y=105 那条水边）划：服务器不接受（水面以外不算"能走"）
++    const y1 = p.y;
++    c.ws.send(encodeReport({ x: p.x, y: 108 * 16, flags: packFlags('down', true, false, true, false, false, false, true) })); await sleep(120);
++    expect(p.y).toBe(y1);
++  });
++
++  it('船上能钓鱼：划到湖心甩一竿，鱼落在船前面的水面上、水域按船所在那片算；普通骑车（不是船）还是不让钓', async () => {
++    const cl = await setup();
++    await cl.wait('bike_drops');
++    cl.send({ t: 'ride', on: true }); await cl.wait('ride_result', 0, 4000, (m) => m.ok);
++    const p = G().get(cl.uid)!;
++    p.x = 100 * 16 + 8; p.y = 100 * 16 + 8; // 池塘正中间：四周都是水，岸上那套"站在岸边"根本不成立
++    p.flags = (p.flags & ~3) | 0; // 朝下
++    cl.msgs.length = 0; cl.send({ t: 'fish_cast' });
++    const w = await cl.wait('fish_state', 0, 4000, (m) => m.s === 'wait');
++    expect(w.zone).toBe('deep'); // 湖心深水
++    expect(w.x).toBeTruthy(); expect(w.y).toBeTruthy();
++    const wm = (srv!.game as unknown as { water: { at: (x: number, y: number) => boolean } }).water;
++    expect(wm.at(w.x!, w.y!)).toBe(true); // 浮漂落在水面上
++    expect(Math.hypot(w.x! - p.x, w.y! - p.y)).toBeLessThanOrEqual(40); // 就在船头前面，没抛到岸上去
++    // 收线放弃，别影响后面的用例
++    cl.send({ t: 'fish_cancel' }); await cl.wait('fish_state', 0, 4000, (m) => m.s === 'idle');
++    // 骑车（不是船）还是不能钓：规则没被放宽（等过 900ms 的抛竿冷却）
++    await sleep(950);
++    p.rideKind = 'bike';
++    cl.msgs.length = 0; cl.send({ t: 'fish_cast' });
++    const bad = await cl.wait('fish_state', 0, 4000, (m) => m.s === 'idle' && !!m.msg);
++    expect(bad.msg).toContain('下车');
++  });
++
++  it('靠岸才能下船：湖心按 E 会被拒（人还在船上），划回岸边才下得去，船留在水面上别人能接着划', async () => {
++    const c = await setup();
++    await c.wait('bike_drops');
++    c.send({ t: 'ride', on: true }); await c.wait('ride_result', 0, 4000, (m) => m.ok);
++    const p = G().get(c.uid)!;
++    // 湖心（四周 100 像素内没有陆地）：下不了船
++    p.x = 100 * 16 + 8; p.y = 100 * 16 + 8;
++    c.msgs.length = 0; c.send({ t: 'ride', on: false });
++    const no = await c.wait('ride_result');
++    expect(no.ok).toBe(false); expect(no.stay).toBe(true);
++    expect(G().get(c.uid)!.riding).toBe(true); // 还在船上
++    // 划回岸边：能下船，人站到陆地上，船留在原来的水面
++    p.x = 97 * 16 + 8; p.y = 105 * 16 + 8;
++    c.msgs.length = 0; c.send({ t: 'ride', on: false });
++    const ok = await c.wait('ride_result');
++    expect(ok.ok).toBe(true);
++    const me = G().get(c.uid)!;
++    expect(me.riding).toBe(false); expect(me.flags & (FLAG_RIDE | FLAG_BOAT)).toBe(0);
++    expect(me.y).toBeGreaterThan(105 * 16); // 站到岸上（水的外面）
++    const atSpot = srv!.game.dropped.list().filter((b) => b.k === 'boat' && b.x === 97 * 16 + 8 && b.y === 105 * 16 + 8);
++    expect(atSpot).toHaveLength(1); // 船停在刚才划到的位置（别的停船点上的船不算）
++  });
++});
++
++describe('小船 · 自动归位（别把船丢在湖心）', () => {
++  const tok = (k: string) => `home${k}`.padEnd(24, k);
++  const shore = { x: 97 * 16 + 8, y: 106 * 16 + 8 };
++  const center = { x: 100 * 16 + 8, y: 100 * 16 + 8 };
++  const setup = async () => {
++    srv = await startServer({ port: 0, world: pondWorld, game: { mons: { gift: false } } });
++    srv.store.set(PlayerStore.key(tok('H')), { profile: { name: '归位', gender: 'f', look: 1, college: '机电学院', major: '机械设计', year: 2024 } as never, x: shore.x, y: shore.y, seen: Date.now(), inv: { fishing_rod: 1, bait: 20 } });
++    const c = await client(srv.port, '归位', tok('H'));
++    const g = srv.game as unknown as { dropped: { list: () => { id: number; x: number; y: number; k?: string }[]; move: (id: number, x: number, y: number, now: number) => unknown }; boatMoors: { x: number; y: number }[]; boatHomeTick: (now: number) => void };
++    return { c, g };
++  };
++  const atMoor = (g: { boatMoors: { x: number; y: number }[] }, b: { x: number; y: number }) => g.boatMoors.some((m) => Math.hypot(m.x - b.x, m.y - b.y) < 1);
++
++  it('没人用的船会自己漂回停船点（湖心 60 秒就回来），已经在停船点的不会被搬来搬去', async () => {
++    const { c, g } = await setup();
++    const drops = await c.wait('bike_drops');
++    const boat = drops.list.filter((b) => b.k === 'boat')[0];
++    expect(BOAT_STRANDED_MS).toBeLessThan(BOAT_HOME_MS);
++    // 造一条"被丢在湖心、放了 2 分钟"的船
++    g.dropped.move(boat.id, center.x, center.y, Date.now() - BOAT_STRANDED_MS - 1000);
++    c.msgs.length = 0;
++    g.boatHomeTick(Date.now());
++    const back = g.dropped.list().find((b) => b.id === boat.id)!;
++    expect(atMoor(g, back), `应该回到停船点：${back.x},${back.y}`).toBe(true);
++    await c.wait('bike_drop', 0, 3000, (m) => m.bike.id === boat.id); // 客户端收到"这条船挪位置了"（同一个 id）
++    // 再 tick 一次（很久以后）：已经在停船点上，不动
++    const before = { x: back.x, y: back.y };
++    c.msgs.length = 0;
++    g.boatHomeTick(Date.now() + BOAT_HOME_MS * 2);
++    const after = g.dropped.list().find((b) => b.id === boat.id)!;
++    expect(after.x).toBe(before.x); expect(after.y).toBe(before.y);
++    expect(c.msgs.some((m) => m.t === 'bike_drop')).toBe(false); // 没白搬
++  });
++
++  it('船少了会自己补回来：停在岸边的 + 有人正划着的算在一起，不会越补越多', async () => {
++    const { c, g } = await setup();
++    await c.wait('bike_drops');
++    const take = (id: number) => (g.dropped as unknown as { take: (id: number) => boolean }).take(id);
++    const boatsNow = () => g.dropped.list().filter((b) => b.k === 'boat');
++    const n0 = boatsNow().length;
++    const cap = Math.min(BOAT_COUNT, g.boatMoors.length); // 小池塘停船点少，能放几条就几条
++    expect(n0).toBe(cap);
++    // 假装这几条船都被弄丢了：下一次秒级检查应该补回来
++    for (const b of boatsNow()) take(b.id);
++    g.boatHomeTick(Date.now());
++    expect(boatsNow()).toHaveLength(n0);
++    // 再 tick 几次不会再变多
++    for (let i = 0; i < 3; i++) g.boatHomeTick(Date.now() + i * 1000);
++    expect(boatsNow()).toHaveLength(n0);
++    // 有人正划着的时候不重复补：脚下那一条不算"丢了"
++    const p = G().get(c.uid)!;
++    take(boatsNow()[0].id); p.riding = true; p.rideKind = 'boat';
++    g.boatHomeTick(Date.now());
++    expect(boatsNow()).toHaveLength(cap - 1);
++  });
++
++  it('划到湖心直接下线：船不会丢在湖中间（直接回停船点）', async () => {
++    const { c, g } = await setup();
++    await c.wait('bike_drops');
++    const n0 = g.dropped.list().filter((b) => b.k === 'boat').length;
++    c.send({ t: 'ride', on: true }); await c.wait('ride_result', 0, 4000, (m) => m.ok);
++    const p = G().get(c.uid)!;
++    p.x = center.x; p.y = center.y;
++    c.ws.close(); await sleep(300);
++    const boats = g.dropped.list().filter((b) => b.k === 'boat');
++    expect(boats).toHaveLength(n0); // 一条不少
++    expect(boats.some((b) => Math.hypot(b.x - center.x, b.y - center.y) < 40)).toBe(false); // 没有一条留在湖心
++    expect(boats.some((b) => atMoor(g, b))).toBe(true); // 回到了停船点
++  });
++});
+diff --git a/tests/tandem.test.ts b/tests/tandem.test.ts
+new file mode 100644
+index 0000000..a286ae8
+--- /dev/null
++++ b/tests/tandem.test.ts
+@@ -0,0 +1,125 @@
++import { describe, it, expect, afterEach } from 'vitest';
++import { existsSync, readFileSync } from 'node:fs';
++import { join } from 'node:path';
++import { WorldMap } from '../src/world/WorldMap';
++import WebSocket from 'ws';
++import { startServer } from '../server/index';
++import { PlayerStore } from '../server/store';
++import { PROTOCOL_VERSION, FLAG_TANDEM, FLAG_RIDE, type ServerMsg } from '../src/shared/protocol';
++import { validateProfile } from '../src/shared/profile';
++import { TANDEM_SPEED_MULT, tandemSpots } from '../src/shared/bikes';
++
++const W = 200;
++/** 测试用的停车点（世界只有 200×200 格，真实点位在校园地图上，见下面的规则测试） */
++const T = { x: 1000, y: 1000 };
++const world = {
++  width: W, height: W, collision: Array.from({ length: W }, () => '0'.repeat(W)), spawn: { x: 20, y: 20 }, pois: [],
++  bikes: [{ x: 200, y: 200 }],
++  tandems: [{ x: T.x, y: T.y }],
++};
++const open: WebSocket[] = [];
++let srv: Awaited<ReturnType<typeof startServer>> | null = null;
++afterEach(async () => { for (const w of open.splice(0)) w.terminate(); await srv?.close(); srv = null; });
++const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
++const tok = (k: string) => `tandemtoken${k}`.padEnd(24, k);
++const profile = (name: string) => ({ name, gender: 'f' as const, look: 1, college: '机电学院', major: '机械设计', year: 2024 });
++
++async function client(port: number, name: string, token: string, at: { x: number; y: number }) {
++  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`); open.push(ws);
++  const msgs: ServerMsg[] = [];
++  ws.on('message', (d, bin) => { if (!bin) msgs.push(JSON.parse(d.toString()) as ServerMsg); });
++  await new Promise<void>((r, j) => { ws.on('open', () => r()); ws.on('error', j); });
++  const send = (m: unknown) => ws.send(JSON.stringify(m));
++  const wait = async <T extends ServerMsg['t']>(t: T, from = 0, ms = 4000, f: (m: Extract<ServerMsg, { t: T }>) => boolean = () => true) => {
++    const end = Date.now() + ms;
++    while (Date.now() < end) { const m = msgs.slice(from).find((x): x is Extract<ServerMsg, { t: T }> => x.t === t && f(x as Extract<ServerMsg, { t: T }>)); if (m) return m; await sleep(15); }
++    throw new Error(`等不到 ${t}`);
++  };
++  const r = validateProfile(profile(name)); if (!r.ok) throw new Error(r.error);
++  send({ t: 'hello', v: PROTOCOL_VERSION, token, profile: r.profile });
++  const w = await wait('welcome');
++  return { ws, send, msgs, wait, uid: w.uid, id: w.id, at };
++}
++const G = (s: NonNullable<typeof srv>) => s.game as unknown as { byUid: Map<number, { x: number; y: number; riding: boolean; rideKind: string; flags: number; passenger: number; paxOf: number }> };
++
++describe('双人自行车（规则）', () => {
++  it('校园里停了 4 辆双人车：位置互不重叠、都在地图里；速度比共享单车快', () => {
++    const spots = tandemSpots();
++    expect(spots).toHaveLength(4);
++    for (const a of spots) for (const b of spots) if (a !== b) expect(Math.hypot(a.x - b.x, a.y - b.y)).toBeGreaterThan(40);
++    expect(TANDEM_SPEED_MULT).toBeGreaterThan(1);
++  });
++});
++
++describe('双人自行车（服务器）', () => {
++  it('停在双人车旁边按 E 骑的就是双人车：服务端记车型、flags 带 FLAG_TANDEM、共享单车的点仍然是普通车', async () => {
++    srv = await startServer({ port: 0, world, game: { mons: { gift: false } } });
++    const key = PlayerStore.key(tok('A'));
++    srv.store.set(key, { profile: profile('骑手') as never, x: T.x, y: T.y, seen: Date.now() });
++    const a = await client(srv.port, '骑手', tok('A'), { x: T.x, y: T.y });
++    let n = a.msgs.length; a.send({ t: 'ride', on: true });
++    const r = await a.wait('ride_result', n);
++    expect(r.ok).toBe(true); expect(r.kind).toBe('tandem');
++    const p = G(srv).byUid.get(a.uid)!;
++    expect(p.riding).toBe(true); expect(p.rideKind).toBe('tandem');
++    expect(p.flags & FLAG_TANDEM).toBe(FLAG_TANDEM); expect(p.flags & FLAG_RIDE).toBe(FLAG_RIDE);
++    // 锁车：车留在脚边，且标明是双人车（别人能接着骑）
++    n = a.msgs.length; a.send({ t: 'ride', on: false });
++    expect((await a.wait('ride_result', n)).ok).toBe(true);
++    const drop = await a.wait('bike_drop', n);
++    expect(drop.bike.k).toBe('tandem');
++    expect(G(srv).byUid.get(a.uid)!.flags & (FLAG_RIDE | FLAG_TANDEM)).toBe(0);
++    // 共享单车点：还是普通车
++    const key2 = PlayerStore.key(tok('B'));
++    srv.store.set(key2, { profile: profile('路人') as never, x: 200, y: 200, seen: Date.now() });
++    const b = await client(srv.port, '路人', tok('B'), { x: 200, y: 200 });
++    n = b.msgs.length; b.send({ t: 'ride', on: true });
++    const r2 = await b.wait('ride_result', n);
++    expect(r2.kind).toBe('bike'); expect(G(srv).byUid.get(b.uid)!.rideKind).toBe('bike');
++  });
++
++  it('后座：双人车谁都能坐（不用组队），共享单车还是只能坐队友的', async () => {
++    srv = await startServer({ port: 0, world, game: { mons: { gift: false } } });
++    // A 骑双人车，B 是陌生人
++    srv.store.set(PlayerStore.key(tok('C')), { profile: profile('司机') as never, x: T.x, y: T.y, seen: Date.now() });
++    srv.store.set(PlayerStore.key(tok('D')), { profile: profile('同学') as never, x: T.x + 20, y: T.y + 6, seen: Date.now() });
++    const a = await client(srv.port, '司机', tok('C'), { x: T.x, y: T.y });
++    const b = await client(srv.port, '同学', tok('D'), { x: T.x + 20, y: T.y + 6 });
++    let n = a.msgs.length; a.send({ t: 'ride', on: true }); expect((await a.wait('ride_result', n)).kind).toBe('tandem');
++    // 陌生人坐后座：可以
++    n = b.msgs.length; b.send({ t: 'pax_join', uid: a.uid });
++    const ok = await b.wait('pax_result', n);
++    expect(ok.ok).toBe(true); expect(ok.pid).toBe(a.id); expect(ok.kind).toBe('tandem');
++    expect(G(srv).byUid.get(b.uid)!.paxOf).toBe(a.uid);
++    expect(G(srv).byUid.get(a.uid)!.passenger).toBe(b.uid);
++    // 后座只坐一个：第三个人上不来
++    srv.store.set(PlayerStore.key(tok('E')), { profile: profile('第三人') as never, x: T.x + 10, y: T.y, seen: Date.now() });
++    const c = await client(srv.port, '第三人', tok('E'), { x: T.x + 10, y: T.y });
++    n = c.msgs.length; c.send({ t: 'pax_join', uid: a.uid });
++    expect((await c.wait('pax_result', n)).ok).toBe(false);
++  });
++
++  it('共享单车仍然只让队友坐后座（不是队友就被拒）', async () => {
++    srv = await startServer({ port: 0, world, game: { mons: { gift: false } } });
++    srv.store.set(PlayerStore.key(tok('F')), { profile: profile('骑车人') as never, x: 200, y: 200, seen: Date.now() });
++    srv.store.set(PlayerStore.key(tok('G')), { profile: profile('陌生人') as never, x: 214, y: 204, seen: Date.now() });
++    const a = await client(srv.port, '骑车人', tok('F'), { x: 200, y: 200 });
++    const b = await client(srv.port, '陌生人', tok('G'), { x: 214, y: 204 });
++    let n = a.msgs.length; a.send({ t: 'ride', on: true }); expect((await a.wait('ride_result', n)).kind).toBe('bike');
++    n = b.msgs.length; b.send({ t: 'pax_join', uid: a.uid });
++    const res = await b.wait('pax_result', n);
++    expect(res.ok).toBe(false); expect(res.msg).toContain('队友');
++  });
++});
++
++describe.skipIf(!existsSync(join(__dirname, '..', 'public', 'assets', 'generated', 'world.json')))('双人车停放点（真实校园地图）', () => {
++  it('4 个点都站得住（不在水里、不在建筑里），玩家走过去就能按 E 骑', () => {
++    const w = JSON.parse(readFileSync(join(__dirname, '..', 'public', 'assets', 'generated', 'world.json'), 'utf8'));
++    const map = new WorldMap({ width: w.width, height: w.height, collision: w.collision });
++    for (const s of tandemSpots()) {
++      expect(s.x, `x=${s.x}`).toBeGreaterThan(0); expect(s.x).toBeLessThan(map.pxW);
++      expect(s.y, `y=${s.y}`).toBeGreaterThan(0); expect(s.y).toBeLessThan(map.pxH);
++      expect(map.boxBlocked(s.x, s.y), `${s.x},${s.y} 卡在障碍里`).toBe(false);
++    }
++  });
++});
+diff --git a/tools/art/bikes.ts b/tools/art/bikes.ts
+index 2c121fb..1a04fee 100644
+--- a/tools/art/bikes.ts
++++ b/tools/art/bikes.ts
+@@ -144,6 +144,108 @@ const fin = (raw: Img): Img => {
+ };
+ const mirror = (r: Img): Img => { const m = new Img(r.w, r.h); for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) { const c = r.get(r.w - 1 - x, y); if (c[3]) m.set(x, y, c); } return m; };
+ 
++
++// ------------------------------------------------------------ 双人自行车（tandem）
++/**
++ * 双人车：比共享单车长的车架 + 两副车座与车把（前座是司机、后座是乘客），青绿色车架好认。
++ * 画布 42×20（描边后 44×22，脚下再加 1 行投影），脚点 = 底边中点 (21, 19)。
++ * 帧名：tandem_{dir}_{帧} / tandemf_down_{帧}（朝下时的前层）/ tandem_parked_r|l
++ */
++export const TANDEM_W = 44, TANDEM_H = 23, TANDEM_AX = 22, TANDEM_AY = 21;
++const TC = { base: hex('#2fa8a0'), light: hex('#6ee0d4'), shade: hex('#1d7a76'), dark: hex('#125a58') };
++
++/** 侧视双人车：后轮 9、前轮 33；后曲柄 17（乘客）、前曲柄 27（司机） */
++function tandemSide(f: number, o: { legs: boolean; parked?: boolean }): Img {
++  const img = new Img(TANDEM_W - 2, TANDEM_H - 2);
++  const wy = 14.5, rear = 8.5, front = 33.5;
++  const bb2: [number, number] = [17, 15], bb1: [number, number] = [27, 15];
++  const th = f * (Math.PI / 2);
++  const pedal = (bb: [number, number], a: number): [number, number] => [bb[0] + Math.cos(a) * 3, bb[1] + Math.sin(a) * 3];
++  const legs = (hipX: number, bb: [number, number], a: number, far: boolean) => {
++    const p = pedal(bb, a), k: [number, number] = [(hipX + p[0]) / 2 + 1.5, (p[1] + 7.5) / 2 - 1];
++    line(img, hipX, 7.5, k[0], k[1], far ? LEG_FAR : LEG, 2); line(img, k[0], k[1], p[0], p[1] - 1, far ? LEG_FAR : LEG, 2);
++    img.rect(Math.round(p[0]) - 1, Math.round(p[1]), 4, 2, SHOE); if (!far) img.hline(Math.round(p[0]) - 1, Math.round(p[1]), 4, SHOE_HI);
++  };
++  if (o.legs) { legs(25, bb1, th + Math.PI, true); legs(15, bb2, th, true); } // 远侧两条腿先画
++  wheel(img, rear, wy, f); wheel(img, front, wy, f);
++  // 车架：一条长长的下管连起两个中轴与前叉
++  line(img, bb2[0], bb2[1], bb1[0], bb1[1], TC.base, 2);
++  line(img, bb2[0], bb2[1], rear, wy, TC.shade, 2);
++  line(img, bb1[0], bb1[1], front, wy, TC.base, 2);
++  line(img, 14, 9.5, bb2[0], bb2[1] - 0.5, TC.base, 2); // 后座管
++  line(img, 24, 8.5, bb1[0], bb1[1] - 0.5, TC.base, 2); // 前座管
++  // 两副车座
++  img.rect(11, 6, 6, 2, SADDLE); img.hline(11, 6, 6, SADDLE_HI);
++  img.rect(21, 5, 6, 2, SADDLE); img.hline(21, 5, 6, SADDLE_HI);
++  // 两副车把（后把矮一点，前把带车筐）
++  img.rect(16, 4, 2, 4, STEEL); img.hline(14, 4, 4, SADDLE);
++  line(img, 30, 6.5, 33, 4, STEEL_L); img.rect(32, 3, 3, 2, SADDLE);
++  img.rect(31, 6, 3, 3, TC.base); img.hline(31, 6, 3, TC.light); // 头管
++  basketSide(img, 34, 4);
++  // 两个中轴 + 曲柄
++  for (const bb of [bb2, bb1]) {
++    const p = pedal(bb, th); line(img, bb[0], bb[1], p[0], p[1], STEEL_L); img.set(Math.round(bb[0]), Math.round(bb[1]), TC.dark);
++  }
++  if (o.legs) { legs(25, bb1, th, false); legs(15, bb2, th + Math.PI, false); } // 近侧两条腿
++  if (o.parked) { line(img, 15, 17, 13, 19.5, STEEL); img.hline(12, 19, 3, STEEL); } // 脚撑
++  return img;
++}
++
++/** 正视双人车：两副车把前后错开，两个车座一前一后（背面那只露一点） */
++function tandemFront(f: number): [Img, Img] {
++  const back = new Img(TANDEM_W - 2, TANDEM_H - 2), fr = new Img(TANDEM_W - 2, TANDEM_H - 2);
++  const cx = 21, th = f * (Math.PI / 2);
++  const yl = 14 + Math.round(Math.cos(th) * 2.6), yr = 14 - Math.round(Math.cos(th) * 2.6);
++  const leg = (hx: number, px: number, py: number, c: RGBA) => { line(back, hx, 8, px, py - 1, c, 2); back.rect(px - 1, py, 4, 2, SHOE); back.hline(px - 1, py, 4, SHOE_HI); };
++  leg(18, 16, yl, LEG); leg(24, 25, yr, LEG);
++  back.rect(cx - 3, 4, 7, 2, SADDLE); back.hline(cx - 3, 4, 7, SADDLE_HI); // 后座（靠上一点，被前面的人挡住大半）
++  back.rect(cx - 2, 6, 5, 3, TC.base);
++  fr.rect(cx - 3, 7, 7, 2, SADDLE); fr.hline(cx - 3, 7, 7, SADDLE_HI); // 前座
++  wheelThin(fr, cx, 14.5, f);
++  fr.rect(cx - 1, 9, 3, 4, TC.base); fr.vline(cx - 1, 9, 4, TC.light);
++  fr.rect(cx - 12, 6, 25, 2, TC.base); fr.hline(cx - 12, 6, 25, TC.light); // 前车把（更宽）
++  fr.rect(cx - 14, 5, 3, 4, SADDLE); fr.rect(cx + 11, 5, 3, 4, SADDLE);
++  fr.rect(cx - 5, 4, 11, 2, STEEL); // 后车把横在上面
++  fr.rect(cx - 9, 8, 9, 5, TC.shade); fr.rect(cx - 8, 9, 7, 3, TC.base); // 车筐
++  fr.hline(cx - 9, 8, 9, TC.light);
++  return [back, fr];
++}
++
++/** 背视双人车：后座、后车把、后轮 */
++function tandemRear(f: number): Img {
++  const img = new Img(TANDEM_W - 2, TANDEM_H - 2);
++  const cx = 21, th = f * (Math.PI / 2);
++  const yl = 14 + Math.round(Math.cos(th) * 2.6), yr = 14 - Math.round(Math.cos(th) * 2.6);
++  const leg = (hx: number, px: number, py: number) => { line(img, hx, 8, px, py - 1, LEG_FAR, 2); img.rect(px - 1, py, 4, 2, SHOE); img.hline(px - 1, py, 4, SHOE_HI); };
++  leg(18, 16, yl); leg(24, 25, yr);
++  img.rect(cx - 14, 5, 3, 4, SADDLE); img.rect(cx + 11, 5, 3, 4, SADDLE); // 后车把握把
++  img.rect(cx - 12, 6, 25, 2, TC.shade);
++  img.rect(cx - 3, 6, 7, 2, SADDLE); img.hline(cx - 3, 6, 7, SADDLE_HI);
++  img.rect(cx - 2, 8, 5, 3, TC.base);
++  wheelThin(img, cx, 14.5, f);
++  img.rect(cx - 2, 8, 5, 3, TC.base); img.hline(cx - 2, 8, 5, TC.light); // 后挡泥板
++  img.rect(cx - 2, 11, 5, 3, hex('#3a3f4c')); img.hline(cx - 2, 11, 5, STEEL); img.set(cx, 12, hex('#5fe08a'));
++  return img;
++}
++
++export function buildTandems(): Record<string, Img> {
++  const frames: Record<string, Img> = {};
++  for (let f = 0; f < 4; f++) {
++    const r = fin(tandemSide(f, { legs: true }));
++    frames[`tandem_right_${f}`] = r; frames[`tandem_left_${f}`] = mirror(r);
++    const [b, fr] = tandemFront(f);
++    frames[`tandem_down_${f}`] = fin(b); frames[`tandemf_down_${f}`] = fin(fr);
++    frames[`tandem_up_${f}`] = fin(tandemRear(f));
++  }
++  const parked = fin(tandemSide(0, { legs: false, parked: true }));
++  frames['tandem_parked_r'] = parked; frames['tandem_parked_l'] = mirror(parked);
++  return frames;
++}
++/** 双人车的骑手摆位：司机坐前座（比单车更靠前），乘客（后座）在司机后方 11 像素 */
++export const TANDEM_RIDER = { crop: 35, dy: 5, dx: { right: 6, left: -6, down: 0, up: 0 } };
++/** 后座乘客相对司机的偏移（像素）：朝右时在左后方、朝下时在正下方……和单车一样"往车尾方向偏" */
++export const TANDEM_PAX = { right: [-13, 0], left: [13, 0], down: [0, -9], up: [0, 9] } as const;
++
+ export interface BikeFrames { frames: Record<string, Img> }
+ export function buildBikes(): Record<string, Img> {
+   const frames: Record<string, Img> = {};
+diff --git a/tools/art/boats.ts b/tools/art/boats.ts
+new file mode 100644
+index 0000000..6a8c5dd
+--- /dev/null
++++ b/tools/art/boats.ts
+@@ -0,0 +1,156 @@
++/**
++ * 精工湖的小木船（划艇）：浅棕色平底木船，船头翘起、舷边一道浅色木沿，船里横着一块坐板，
++ * 两支桨搭在舷上。划起来会轻轻晃（两帧水波），停在岸边时是空船。
++ *
++ * 画布统一 38×22（描边后 40×24，再加一行水面投影 → 40×25），脚点 = 船心 (20, 21)。
++ * 帧名：
++ *   boat_{dir}_{帧}    船身（人物身后的一层，4 个方向 × 2 帧）
++ *   boatf_down_{帧}    朝下时船头那一半（盖在人物身前，人才像"坐在船里"）
++ *   boat_parked_r|l    空船（停在岸边；朝左是镜像）
++ */
++import { Img, hex, type RGBA } from './px.ts';
++
++export type BoatDir = 'down' | 'up' | 'left' | 'right';
++export const BOAT_W = 40, BOAT_H = 25, BOAT_AX = 20, BOAT_AY = 21;
++/** 描边前的画布（所有帧一致，脚点才对得齐） */
++const CW = 38, CH = 22;
++/** 舷边（船沿）在画布上的高度：人和桨都贴着这条线 */
++const RIM = 7;
++
++const HULL = hex('#8a5a32'), HULL_L = hex('#b9834a'), HULL_D = hex('#5e3a1e');
++const DECK = hex('#d9a86a'), DECK_L = hex('#efc994'), DECK_D = hex('#a87a44');
++const DARK = hex('#3a2414'), INNER = hex('#57381e'), FOAM = hex('#6ab0c4'), SEAT = hex('#c08a52');
++const OAR = hex('#c9a068'), BLADE = hex('#e4c48e');
++
++function line(img: Img, x0: number, y0: number, x1: number, y1: number, c: RGBA) {
++  x0 = Math.round(x0); y0 = Math.round(y0); x1 = Math.round(x1); y1 = Math.round(y1);
++  const dx = Math.abs(x1 - x0), dy = -Math.abs(y1 - y0), sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1;
++  let err = dx + dy;
++  for (;;) {
++    img.set(x0, y0, c);
++    if (x0 === x1 && y0 === y1) break;
++    const e2 = 2 * err;
++    if (e2 >= dy) { err += dy; x0 += sx; }
++    if (e2 <= dx) { err += dx; y0 += sy; }
++  }
++}
++
++/**
++ * 侧视（朝右）：略俯视的角度 —— 上面一条「远端船沿」的弧线，中间是船舱（深色），
++ * 下面一条「近端船沿」+ 船壳（浅棕，带木缝），船底贴着水花。船头（右）微微翘起。
++ * bob 0/1 = 整体上下 1px、桨换个位置，看着像浮在水上轻轻晃。
++ */
++function side(bob: number, o: { rowing: boolean; moored?: boolean }): Img {
++  const img = new Img(CW, CH);
++  const lift = bob ? 1 : 0;
++  const farY = (t: number) => 5 + lift - Math.round(Math.sin(Math.PI * t) * 1.2);
++  const nearY = (t: number) => 11 + lift - Math.round(Math.sin(Math.PI * t) * 1.6);
++  const botY = (t: number) => nearY(t) + 3 + Math.round(Math.sin(Math.PI * Math.min(1, t * 1.02)) ** 0.8 * 4);
++  for (let x = 2; x <= 35; x++) {
++    const t = (x - 2) / 33;
++    const bow = t > 0.9 ? Math.round((t - 0.9) * 20) : 0; // 船头翘起来
++    const fY = farY(t) - bow, nY = nearY(t) - bow, bY = botY(t) - bow;
++    // 远端船沿（浅色木边）
++    img.set(x, fY, DECK_L); img.set(x, fY + 1, DECK_D);
++    // 船舱（深色），两端收窄变浅
++    for (let y = fY + 2; y < nY; y++) img.set(x, y, DARK);
++    // 近端船沿
++    img.set(x, nY, DECK_L); img.set(x, nY + 1, DECK);
++    // 船壳
++    for (let y = nY + 2; y <= bY; y++) img.set(x, y, y >= bY ? HULL_D : HULL);
++    if (bY - nY > 3) img.set(x, nY + 3, HULL_D); // 船壳上一道木缝
++  }
++  // 船尾（左）的方尾 + 船头（右）的木头尖
++  img.rect(1, 7 + lift, 1, 6, HULL_D); img.set(2, 6 + lift, DECK_D);
++  img.rect(35, 4 + lift, 2, 4, HULL_L); img.set(37, 3 + lift, DECK);
++  // 坐板：横在船舱里的一块浅色板子
++  img.rect(14, 8 + lift, 8, 2, SEAT);
++  // 水线：贴着船底的一圈浪花
++  for (let x = 5; x <= 32; x++) { const t = (x - 2) / 33; if ((x + bob * 2) % 6 !== 0) img.set(x, botY(t) - (t > 0.9 ? Math.round((t - 0.9) * 20) : 0) + 1, FOAM); }
++  // 两支桨：一支伸出船外点水，一支斜搭在舷上
++  if (o.rowing) {
++    const bx = 27 + bob, by = 17 + lift - bob;
++    line(img, 17, 9 + lift, 22, 13 + lift, OAR); line(img, 22, 13 + lift, bx, by, OAR);
++    img.rect(bx - 1, by, 3, 2, BLADE);
++    line(img, 19, 8 + lift, 26, 11 + lift, OAR); img.rect(25, 11 + lift, 2, 1, BLADE);
++  } else {
++    line(img, 16, 9 + lift, 29, 12 + lift, OAR); img.rect(28, 12 + lift, 3, 1, BLADE);
++    line(img, 14, 10 + lift, 24, 14 + lift, OAR); img.rect(23, 14 + lift, 2, 1, BLADE);
++  }
++  // 系船桩（停在岸边时）
++  if (o.moored) { img.rect(4, 5 + lift, 1, 6, HULL_D); img.set(4, 4 + lift, DECK); }
++  return img;
++}
++
++/**
++ * 正/背视（俯视多一点）：一圈浅色船沿包着深色船舱，中间横一块坐板；船头那一端收窄。
++ * bowDown = 船头朝画面下方。返回 [船身, 船头那一半]（后者只在朝下时盖到人物前面）。
++ */
++function front(bob: number, bowDown: boolean): [Img, Img] {
++  const back = new Img(CW, CH), fr = new Img(CW, CH);
++  const cx = 19, top = 6 + (bob ? 0 : 1), hh = 12;
++  const halfAt = (y: number) => {
++    const t = y / (hh - 1);                                  // 0 = 船尾，1 = 船头
++    const oval = Math.sin(Math.PI * Math.min(1, 0.12 + t * 0.92)) ** 0.6;
++    const taper = bowDown ? 1 - 0.42 * t ** 1.7 : 0.62 + 0.38 * t ** 1.7;
++    return Math.max(2, Math.round(15 * oval * taper));
++  };
++  for (let y = 0; y < hh; y++) {
++    const half = halfAt(y), yy = top + y;
++    back.rect(cx - half, yy, half * 2 + 1, 1, DECK_L);        // 船沿（浅色木边）
++    if (half > 3) {
++      back.set(cx - half, yy, DECK_D); back.set(cx + half, yy, DECK_D);
++      back.hline(cx - half + 2, yy, (half - 1) * 2, INNER);   // 船舱（木色，不是黑洞）
++      back.set(cx - half + 1, yy, DECK);                      // 船沿内侧一点亮
++      back.set(cx + half - 1, yy, DECK);
++    }
++  }
++  // 坐板
++  back.rect(cx - 7, top + 7, 15, 2, SEAT); back.hline(cx - 7, top + 7, 15, DECK_L);
++  // 船头/船尾的水花
++  for (let x = cx - 10; x <= cx + 10; x++) if ((x + bob * 2) % 5 !== 0) back.set(x, top + hh, FOAM);
++  // 靠近观者的那一段船壳（盖在人物身前，人才像坐在船里）：朝下是船头、朝上是船尾
++  if (true) {
++    for (let y = 10; y < hh; y++) {
++      const half = halfAt(y), yy = top + y;
++      fr.rect(cx - half, yy, half * 2 + 1, 1, DECK_L);
++      if (half > 3) { fr.set(cx - half, yy, DECK_D); fr.set(cx + half, yy, DECK_D); fr.hline(cx - half + 2, yy, (half - 1) * 2, INNER); }
++    }
++  }
++  return [back, fr];
++}
++
++/** 描边 + 船底一圈水面投影（船浮在水上，底下有一点深色水影） */
++const finBoat = (raw: Img): Img => {
++  const o = raw.outlinedSoft(0.42, [40, 28, 18, 255]);
++  const out = new Img(o.w, o.h + 1);
++  for (let y = o.h - 4; y < o.h + 1; y++) for (let x = 4; x < o.w - 4; x++) {
++    const dx = (x + 0.5 - o.w / 2) / 15, dy = (y + 0.5 - (o.h - 1.4)) / 2.1;
++    if (dx * dx + dy * dy <= 1) out.set(x, y, [20, 52, 74, dx * dx + dy * dy > 0.5 ? 28 : 54]);
++  }
++  out.blit(o, 0, 0);
++  return out;
++};
++const mirror = (r: Img): Img => { const m = new Img(r.w, r.h); for (let y = 0; y < r.h; y++) for (let x = 0; x < r.w; x++) { const c = r.get(r.w - 1 - x, y); if (c[3]) m.set(x, y, c); } return m; };
++
++export function buildBoats(): Record<string, Img> {
++  const frames: Record<string, Img> = {};
++  for (let f = 0; f < 2; f++) {
++    const r = finBoat(side(f, { rowing: true }));
++    frames[`boat_right_${f}`] = r; frames[`boat_left_${f}`] = mirror(r);
++    const [b, fr] = front(f, true);
++    frames[`boat_down_${f}`] = finBoat(b); frames[`boatf_down_${f}`] = finBoat(fr);
++    frames[`boat_up_${f}`] = finBoat(front(f, false)[0]);
++    frames[`boatf_up_${f}`] = finBoat(front(f, false)[1]);
++  }
++  const moored = finBoat(side(0, { rowing: false, moored: true }));
++  frames['boat_parked_r'] = moored; frames['boat_parked_l'] = mirror(moored);
++  return frames;
++}
++
++/**
++ * 划船时的骑手摆位：人坐在船中间，只露上半身（腿在船里，不画）。
++ * crop = 从头顶往下留多少像素（26 ≈ 头 + 胸），dy = 人物上抬多少像素（负数 = 往下压，让他坐进船里）。
++ * 摆位规则：可见的下缘 = 船沿下 5 像素（人"坐"在船舱里，而不是浮在船上方）。
++ */
++export const BOAT_RIDER = { crop: 30, dy: -6, dx: { right: 1, left: -1, down: 0, up: 0 } };

@@ -1,0 +1,337 @@
+diff --git a/src/shared/lottery.ts b/src/shared/lottery.ts
+new file mode 100644
+index 0000000..6e5ef78
+--- /dev/null
++++ b/src/shared/lottery.ts
+@@ -0,0 +1,53 @@
++/**
++ * 校园彩票（客户端与服务器共用）：奖池、价格、开奖。
++ *
++ * 设计原则（主人的要求）：**玩家整体是亏的，但偶尔大赚，让人忍不住再买一张**。
++ *  - 单价 300 校园币；
++ *  - 每张的期望回报约 199 币（≈ 66%），也就是长期下来玩家净亏约 1/3；
++ *  - 中奖率 30%（三张里差不多一张有奖），头奖 20000 币概率 0.3%（约 1/333）；
++ *  - 大头奖（≥3000）会在公屏广播，看到别人中奖是最强的"再来一张"动力。
++ *
++ * 概率都写成"万分比"（权重加起来 10000），改数值不用改逻辑；服务器用 crypto.randomInt 开奖，客户端拿不到任何随机源。
++ */
++export const LOTTERY_PRICE = 300;
++export const LOTTERY_MAX_BATCH = 10;      // 一次最多刮 10 张（防连点）
++export const LOTTERY_BIG_WIN = 3000;      // 中到多少以上要在公屏广播
++export const LOTTERY_TICKET = 'lottery';  // 物品 id（背包里的一张票）
++/** 保底：连续这么多张都没中，下一张必给 200（"再差也差不到哪去"，最容易让人接着刮） */
++export const LOTTERY_PITY = 5;
++export const LOTTERY_PITY_PRIZE = 200;
++
++export interface LotteryPrize { prize: number; w: number; label: string }
++/** 权重是万分比，加起来必须 = 10000（tests/lottery.test.ts 会检查） */
++export const LOTTERY_PRIZES: readonly LotteryPrize[] = [
++  { prize: 0, w: 7000, label: '谢谢参与' },
++  { prize: 200, w: 1600, label: '200 校园币' },
++  { prize: 400, w: 900, label: '400 校园币' },
++  { prize: 1000, w: 350, label: '1000 校园币' },
++  { prize: 3000, w: 120, label: '3000 校园币 🎉' },
++  { prize: 20000, w: 30, label: '20000 校园币 🏆头奖' },
++];
++
++/** 一张票的期望回报（校园币）。写在这里是给测试和主人看账的，不参与开奖 */
++export const LOTTERY_EV = LOTTERY_PRIZES.reduce((s, p) => s + p.prize * p.w, 0) / 10000;
++/** 中奖概率（0..1） */
++export const LOTTERY_HIT_RATE = LOTTERY_PRIZES.filter((p) => p.prize > 0).reduce((s, p) => s + p.w, 0) / 10000;
++
++/** 开一张：rnd 返回 [0,1)（服务器传 crypto.randomInt(10000) / 10000） */
++export function drawLottery(rnd: () => number): LotteryPrize {
++  let r = Math.floor(rnd() * 10000);
++  if (!Number.isFinite(r) || r < 0) r = 0;
++  if (r >= 10000) r = 9999;
++  for (const p of LOTTERY_PRIZES) { if (r < p.w) return p; r -= p.w; }
++  return LOTTERY_PRIZES[0];
++}
++
++/**
++ * 带保底的开奖（状态由服务器保存：dry = 连续几张没中）。
++ * 连续 LOTTERY_PITY 张白板后，这一张如果还是白板，就换成 LOTTERY_PITY_PRIZE。
++ */
++export function drawLotteryWithPity(dry: number, rnd: () => number): { prize: LotteryPrize; dry: number } {
++  const base = drawLottery(rnd);
++  if (base.prize === 0 && dry >= LOTTERY_PITY) return { prize: { prize: LOTTERY_PITY_PRIZE, w: 0, label: `${LOTTERY_PITY_PRIZE} 校园币（保底）` }, dry: 0 };
++  return { prize: base, dry: base.prize > 0 ? 0 : dry + 1 };
++}
+diff --git a/src/ui/LotteryUi.ts b/src/ui/LotteryUi.ts
+new file mode 100644
+index 0000000..e05072f
+--- /dev/null
++++ b/src/ui/LotteryUi.ts
+@@ -0,0 +1,108 @@
++import { LOTTERY_MAX_BATCH, LOTTERY_PRICE, LOTTERY_PRIZES, LOTTERY_EV, LOTTERY_HIT_RATE } from '@/shared/lottery';
++import type { NetClient } from '@/net/client';
++import { ui } from './actions';
++
++const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
++  const e = document.createElement(tag);
++  if (cls) e.className = cls;
++  if (text !== undefined) e.textContent = text;
++  return e;
++};
++
++/**
++ * 校园彩票：买票在商店（300 币一张），这里负责"刮"和"看榜"。
++ * 开奖全在服务器（客户端拿不到随机源），这里只显示结果和榜单。
++ */
++export class LotteryUi {
++  private root = el('div', 'screen hidden');
++  private body = el('div', 'lot-body');
++  private msg = el('div', 'board-msg');
++  private left = 0;
++  private title = el('div', 'lot-title');
++  private me = { n: 0, won: 0, best: 0, hits: 0 };
++  /** 我在彩票总榜上的名次（0 = 没上榜） */
++  private rank = 0;
++  /** 亏钱榜（亏 = 票价×张数 − 中奖） */
++  private loss: { uid: number; name: string; loss: number; n: number; won: number }[] = [];
++  private myLoss = 0; private lossRank = 0;
++  /** 赚钱榜（赚 = 中奖 − 票价×张数） */
++  private gain: { uid: number; name: string; gain: number; n: number; won: number }[] = [];
++  private myGain = 0; private gainRank = 0;
++
++  constructor(private net: NetClient) {
++    const panel = el('div', 'box lot');
++    const head = el('div', 'board-head');
++    const close = el('button', 'btn', '✕'); close.type = 'button'; close.setAttribute('aria-label', '关闭彩票');
++    close.addEventListener('click', () => this.close());
++    head.append(el('div', 'board-title', '🎟 校园彩票'), close);
++    const sub = el('div', 'create-sub', `一张 ${LOTTERY_PRICE} 币 · 中奖率 ${Math.round(LOTTERY_HIT_RATE * 100)}% · 一张平均回 ${Math.round(LOTTERY_EV)} 币（长期是亏的，图个乐）`);
++    const bar = el('div', 'lot-bar');
++    const one = el('button', 'btn primary', '刮 1 张'); one.type = 'button'; one.addEventListener('click', () => this.draw(1));
++    const ten = el('button', 'btn', `刮 ${LOTTERY_MAX_BATCH} 张`); ten.type = 'button'; ten.addEventListener('click', () => this.draw(LOTTERY_MAX_BATCH));
++    const buy1 = el('button', 'btn', `买 1 张（${LOTTERY_PRICE} 币）`); buy1.type = 'button'; buy1.addEventListener('click', () => this.net.shopBuy('lottery', 1));
++    const buy10 = el('button', 'btn', `买 ${LOTTERY_MAX_BATCH} 张（${LOTTERY_PRICE * LOTTERY_MAX_BATCH} 币）`); buy10.type = 'button'; buy10.addEventListener('click', () => this.net.shopBuy('lottery', LOTTERY_MAX_BATCH));
++    const buy = buy1;
++    bar.append(one, ten, buy1, buy10);
++    panel.append(head, sub, this.title, bar, this.msg, this.body);
++    this.root.append(panel);
++    this.root.addEventListener('mousedown', (e) => { if (e.target === this.root) this.close(); });
++    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && this.isOpen) this.close(); });
++    (document.getElementById('hud') ?? document.body).append(this.root);
++
++    ui.add({ id: 'lottery', label: '🎟 彩票', run: () => this.toggle() });
++
++    const h = net.handlers;
++    h.lotResult = (prizes, labels, total, left) => {
++      this.left = left; this.msg.className = 'board-msg';
++      this.msg.textContent = total > 0 ? `这次一共中了 ${total} 币` : '这次全是谢谢参与…再来一张？';
++      const box = el('div', 'lot-res');
++      prizes.forEach((pz, i) => box.append(el('div', `lot-card${pz > 0 ? ' win' : ''}${pz >= 3000 ? ' big' : ''}`, `${labels[i] ?? (pz > 0 ? `${pz} 币` : '谢谢参与')}`)));
++      this.body.prepend(box);
++      while (this.body.querySelectorAll('.lot-res').length > 5) this.body.querySelector('.lot-res:last-child')?.remove();
++      this.net.lotBook();
++      this.renderHeader();
++    };
++    // 服务端回的彩票榜：自己画两个榜（中奖榜 + 亏钱榜），再广播给名人堂（名人堂在听 pc:lotbook）
++    net.chain('lotBook', (me, top, rank, extra) => {
++      this.me = me; this.rank = rank ?? 0;
++      this.loss = extra?.loss ?? []; this.myLoss = extra?.myLoss ?? 0; this.lossRank = extra?.lossRank ?? 0;
++      this.gain = extra?.gain ?? []; this.myGain = extra?.myGain ?? 0; this.gainRank = extra?.gainRank ?? 0;
++      this.renderBoard(top); this.renderHeader();
++      window.dispatchEvent(new CustomEvent('pc:lotbook', { detail: { me, top, rank } }));
++    });
++    net.chain('inv', (items) => { this.left = items['lottery'] ?? 0; this.renderHeader(); }); // 买完/刮完立刻更新张数（链式：不覆盖背包/合成台）
++  }
++  get isOpen() { return !this.root.classList.contains('hidden'); }
++  open() { this.root.classList.remove('hidden'); this.renderHeader(); this.net.lotBook(); }
++  close() { this.root.classList.add('hidden'); }
++  toggle() { if (this.isOpen) this.close(); else this.open(); }
++  private draw(n: number) { this.net.lotDraw(n); }
++  private renderHeader() {
++    this.title.textContent = `手上还有 ${this.left} 张 · 刮过 ${this.me.n} 张 · 累计中 ${this.me.won} 币 · 单张最好 ${this.me.best} 币 · 中奖 ${this.me.hits} 次${this.rank ? ` · 榜上第 ${this.rank} 名` : ''}${this.myGain ? ` · 净赚 ${this.myGain}` : this.myLoss ? ` · 净亏 ${this.myLoss}` : ''}`;
++  }
++  private renderBoard(top: { uid: number; name: string; won: number; best: number; hits: number }[]) {
++    const old = this.body.querySelector('.lot-board'); old?.remove();
++    const box = el('div', 'lot-board');
++    box.append(el('div', 'board-title', '🏆 彩票榜（累计中奖）'));
++    if (!top.length) box.append(el('div', 'create-sub', '还没人上榜：第一个中奖的就是你'));
++    top.forEach((r, i) => box.append(el('div', 'lot-row', `${i + 1}. ${r.name}　中 ${r.won} 币　单张最好 ${r.best}　中奖 ${r.hits} 次`)));
++    box.append(el('div', 'create-sub', `奖金池：${LOTTERY_PRIZES.map((p) => `${p.prize || '空'}(${(p.w / 100).toFixed(2)}%)`).join(' · ')}`));
++    this.body.append(box);
++
++    // 赚钱榜：真的把票价赚回来的（中奖 − 买票）
++    const gb = el('div', 'lot-board');
++    gb.append(el('div', 'board-title', '💰 赚钱榜（中奖 − 买票）'));
++    if (!this.gain.length) gb.append(el('div', 'create-sub', '还没人赚钱：目前全服都在亏，中一次大的就能上来'));
++    this.gain.forEach((r, i) => gb.append(el('div', 'lot-row', `${i + 1}. ${r.name}　赚 ${r.gain} 币（刮 ${r.n} 张花 ${r.n * LOTTERY_PRICE}，中回 ${r.won}）`)));
++    if (this.myGain) gb.append(el('div', 'create-sub', `我自己：赚 ${this.myGain} 币${this.gainRank ? ` · 赚钱榜第 ${this.gainRank} 名` : ''}`));
++    this.body.append(gb);
++
++    // 亏钱榜：图个乐，谁刮得最狠
++    const lb = el('div', 'lot-board');
++    lb.append(el('div', 'board-title', '💸 亏钱榜（买票 − 中奖）'));
++    if (!this.loss.length) lb.append(el('div', 'create-sub', '还没人亏钱：要么一张没刮，要么刚好回本'));
++    this.loss.forEach((r, i) => lb.append(el('div', 'lot-row', `${i + 1}. ${r.name}　亏 ${r.loss} 币（刮 ${r.n} 张，中回 ${r.won}）`)));
++    if (this.myLoss) lb.append(el('div', 'create-sub', `我自己：亏 ${this.myLoss} 币${this.lossRank ? ` · 亏钱榜第 ${this.lossRank} 名` : ''}`));
++    this.body.append(lb);
++  }
++}
+diff --git a/tests/lotbook.test.ts b/tests/lotbook.test.ts
+new file mode 100644
+index 0000000..fae6a01
+--- /dev/null
++++ b/tests/lotbook.test.ts
+@@ -0,0 +1,106 @@
++import { describe, it, expect, afterEach } from 'vitest';
++import WebSocket from 'ws';
++import { startServer } from '../server/index';
++import { PlayerStore } from '../server/store';
++import { PROTOCOL_VERSION, type ServerMsg } from '../src/shared/protocol';
++import { validateProfile } from '../src/shared/profile';
++import { LOTTERY_MAX_BATCH, LOTTERY_TICKET } from '../src/shared/lottery';
++
++const W = 200;
++const world = { width: W, height: W, collision: Array.from({ length: W }, () => '0'.repeat(W)), spawn: { x: 20, y: 20 }, pois: [] };
++const open: WebSocket[] = [];
++let srv: Awaited<ReturnType<typeof startServer>> | null = null;
++afterEach(async () => { for (const w of open.splice(0)) w.terminate(); await srv?.close(); srv = null; });
++const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
++const tok = (k: string) => `lottoken${k}`.padEnd(24, k);
++const profile = (name: string) => ({ name, gender: 'f' as const, look: 1, college: '机电学院', major: '机械设计', year: 2024 });
++
++async function client(port: number, name: string, token: string) {
++  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws`); open.push(ws);
++  const msgs: ServerMsg[] = [];
++  ws.on('message', (d, bin) => { if (!bin) msgs.push(JSON.parse(d.toString()) as ServerMsg); });
++  await new Promise<void>((r, j) => { ws.on('open', () => r()); ws.on('error', j); });
++  const send = (m: unknown) => ws.send(JSON.stringify(m));
++  const wait = async <T extends ServerMsg['t']>(t: T, from = 0, ms = 4000, f: (m: Extract<ServerMsg, { t: T }>) => boolean = () => true) => {
++    const end = Date.now() + ms;
++    while (Date.now() < end) { const m = msgs.slice(from).find((x): x is Extract<ServerMsg, { t: T }> => x.t === t && f(x as Extract<ServerMsg, { t: T }>)); if (m) return m; await sleep(15); }
++    throw new Error(`等不到 ${t}`);
++  };
++  const r = validateProfile(profile(name)); if (!r.ok) throw new Error(r.error);
++  send({ t: 'hello', v: PROTOCOL_VERSION, token, profile: r.profile });
++  const w = await wait('welcome');
++  return { ws, send, msgs, wait, uid: w.uid };
++}
++
++describe('彩票榜（名人堂 · 彩票分区）', () => {
++  it('刮过奖就会上榜：lot_book 里 top 有自己的名字、me 记着累计、rank = 1；没刮过的人 rank = 0', async () => {
++    srv = await startServer({ port: 0, world, game: { mons: { gift: false } } });
++    const a = await client(srv.port, '刮奖的人', tok('A')), b = await client(srv.port, '没刮的人', tok('B'));
++    // 给 A 塞 10 张票（正常是商店买）
++    const key = PlayerStore.key(tok('A'));
++    srv.store.get(key)!.inv = { [LOTTERY_TICKET]: 10 }; srv.store.touch();
++    let n = a.msgs.length;
++    a.send({ t: 'lot_draw', n: 10 });
++    const res = await a.wait('lot_result', n);
++    expect(res.prizes).toHaveLength(10);
++    // 保底：连续 5 张白板后第 6 张必中，所以 10 张不可能全空
++    expect(res.total).toBeGreaterThan(0);
++    n = a.msgs.length; a.send({ t: 'lot_book' });
++    const book = await a.wait('lot_book', n);
++    expect(book.me.n).toBe(10); expect(book.me.won).toBe(res.total); expect(book.me.best).toBe(Math.max(...res.prizes));
++    expect(book.top.map((x) => x.uid)).toContain(a.uid);
++    expect(book.top[0]).toMatchObject({ uid: a.uid, name: '刮奖的人', won: res.total });
++    expect(book.rank).toBe(1);
++    // 没刮过的人：榜单里能看到别人，自己 rank 0
++    n = b.msgs.length; b.send({ t: 'lot_book' });
++    const book2 = await b.wait('lot_book', n);
++    expect(book2.me.n).toBe(0); expect(book2.rank).toBe(0);
++    expect(book2.top.map((x) => x.name)).toContain('刮奖的人');
++  });
++
++  it('按累计中奖排、只取前 10；我排第 12 时 rank 仍然是 12（名次不受截断影响）', async () => {
++    srv = await startServer({ port: 0, world, game: { mons: { gift: false } } });
++    // 造 12 个「刮过奖」的存档，累计中奖从 1200 递减到 100
++    for (let i = 0; i < 12; i++) {
++      srv.store.set(PlayerStore.key(tok('P' + i)), {
++        profile: profile('榜' + (i + 1)) as never, seen: Date.now(), uid: srv.store.ensureUid(PlayerStore.key(tok('P' + i))),
++        lt: { n: 10, won: 1200 - i * 100, best: 400, hits: 3 },
++      });
++    }
++    const me = await client(srv.port, '榜12', tok('P11')); // 累计 100，排第 12
++    let n = me.msgs.length; me.send({ t: 'lot_book' });
++    const book = await me.wait('lot_book', n);
++    expect(book.top).toHaveLength(10); // 只给前 10
++    expect(book.top.map((x) => x.won)).toEqual([1200, 1100, 1000, 900, 800, 700, 600, 500, 400, 300]);
++    expect(book.top.every((x) => x.uid !== me.uid)).toBe(true); // 第 12 名不在前 10 里
++    expect(book.rank).toBe(12); // 但自己知道自己是第 12
++    expect(book.me).toMatchObject({ n: 10, won: 100 });
++  });
++
++  it('赚钱榜：只收真的赚了的（中奖 − 张数×票价），和亏钱榜互不重叠；刚好回本两边都不上', async () => {
++    srv = await startServer({ port: 0, world, game: { mons: { gift: false } } });
++    const P = (i: number) => PlayerStore.key(tok('G' + i));
++    const seed = (i: number, n: number, won: number) => srv!.store.set(P(i), {
++      profile: profile('赚' + i) as never, seen: Date.now(), uid: srv!.store.ensureUid(P(i)),
++      lt: { n, won, best: Math.min(won, 500), hits: 1 },
++    });
++    seed(0, 10, 5000);   // 花 3000 中 5000 → 赚 2000
++    seed(1, 10, 3600);   // 花 3000 中 3600 → 赚 600
++    seed(2, 10, 3000);   // 刚好回本 → 两边都不上
++    seed(3, 10, 1000);   // 亏 2000
++    const me = await client(srv.port, '赚0', tok('G0'));
++    let n = me.msgs.length; me.send({ t: 'lot_book' });
++    const book = await me.wait('lot_book', n);
++    expect(book.gain!.map((x) => [x.name, x.gain])).toEqual([['赚0', 2000], ['赚1', 600]]);
++    expect(book.loss!.map((x) => [x.name, x.loss])).toEqual([['赚3', 2000]]);   // 回本的「赚2」不在亏钱榜
++    expect(book.myGain).toBe(2000); expect(book.gainRank).toBe(1);
++    expect(book.myLoss).toBe(0); expect(book.lossRank).toBe(0);
++    // 亏的那个人看：赚钱榜里没有自己
++    const loser = await client(srv.port, '赚3', tok('G3'));
++    n = loser.msgs.length; loser.send({ t: 'lot_book' });
++    const b2 = await loser.wait('lot_book', n);
++    expect(b2.myGain).toBe(0); expect(b2.gainRank).toBe(0);
++    expect(b2.myLoss).toBe(2000); expect(b2.lossRank).toBe(1);
++    expect(b2.gain!.every((x) => x.uid !== loser.uid)).toBe(true);
++  });
++});
+diff --git a/tests/lottery.test.ts b/tests/lottery.test.ts
+new file mode 100644
+index 0000000..9aa695e
+--- /dev/null
++++ b/tests/lottery.test.ts
+@@ -0,0 +1,46 @@
++import { describe, it, expect } from 'vitest';
++import { LOTTERY_EV, LOTTERY_HIT_RATE, LOTTERY_PITY, LOTTERY_PRICE, LOTTERY_PRIZES, drawLottery, drawLotteryWithPity } from '../src/shared/lottery';
++
++describe('校园彩票奖池', () => {
++  it('权重加起来正好 10000（万分比）', () => {
++    expect(LOTTERY_PRIZES.reduce((s, p) => s + p.w, 0)).toBe(10000);
++  });
++  it('长期是亏的：一张期望回报在 190~210 之间，低于售价 300', () => {
++    expect(LOTTERY_EV).toBeGreaterThan(190);
++    expect(LOTTERY_EV).toBeLessThan(210);
++    expect(LOTTERY_EV).toBeLessThan(LOTTERY_PRICE);
++  });
++  it('中奖率 30%（三成有奖，七成白板）', () => {
++    expect(Math.round(LOTTERY_HIT_RATE * 100)).toBe(30);
++  });
++  it('按权重开奖：rnd=0 出白板、rnd 取 0.9999 出头奖；一万次模拟大致对得上概率', () => {
++    expect(drawLottery(() => 0).prize).toBe(0);
++    expect(drawLottery(() => 0.9999).prize).toBe(20000);
++    let wins = 0, total = 0;
++    for (let i = 0; i < 10000; i++) { const p = drawLottery(() => (i * 7919 % 10000) / 10000); if (p.prize > 0) wins++; total += p.prize; }
++    expect(wins).toBeGreaterThan(2500); expect(wins).toBeLessThan(3500);      // ≈30%
++    expect(total / 10000).toBeGreaterThan(150); expect(total / 10000).toBeLessThan(250); // ≈199
++  });
++});
++
++describe('保底：连续 5 张白板后第 6 张必给 200', () => {
++  it('干到 5 张没中时，白板会被换成 200 保底，并清零计数', () => {
++    const r = drawLotteryWithPity(LOTTERY_PITY, () => 0.69); // 这个随机数本来会出白板（<0.70）
++    expect(r.prize.prize).toBe(200);
++    expect(r.dry).toBe(0);
++  });
++  it('没到保底线还是照常出白板，计数 +1；中了就清零', () => {
++    const a = drawLotteryWithPity(2, () => 0.69);
++    expect(a.prize.prize).toBe(0); expect(a.dry).toBe(3);
++    const b = drawLotteryWithPity(2, () => 0.75); // 7500 落在 200 币档
++    expect(b.prize.prize).toBeGreaterThan(0); expect(b.dry).toBe(0);
++  });
++  it('加了保底，期望回报还是低于售价 300（长期仍然亏）', () => {
++    let dry = 0, total = 0;
++    for (let i = 0; i < 30000; i++) { const r = drawLotteryWithPity(dry, () => ((i * 7919) % 10000) / 10000); dry = r.dry; total += r.prize.prize; }
++    const ev = total / 30000;
++    expect(ev).toBeGreaterThanOrEqual(199);
++    expect(ev).toBeLessThan(280);
++    expect(ev).toBeLessThan(LOTTERY_PRICE);
++  });
++});
