@@ -1,9 +1,11 @@
 import type { NetClient } from '@/net/client';
 import type { ServerMsg } from '@/shared/protocol';
 import { CONTENT, monArt, speciesOf } from '@/shared/mons-content';
-import { MON, STAT_KEYS, STAT_NAMES, elementName, maxHp, monStats, xpForLevel, type Mon } from '@/shared/mons';
+import { MON, STAT_KEYS, STAT_NAMES, elementName, maxHp, monStats, moveSlots, xpForLevel, type Mon } from '@/shared/mons';
 import { isCatSpecies } from '@/shared/cat-mons';
+import { filterLearnable } from './monBattleHelpers';
 import { ui } from './actions';
+import type { Host, Section } from './hosted';
 
 type MonData = Extract<ServerMsg, { t: 'mon_data' }>;
 type Tab = 'sq' | 'bx';
@@ -24,12 +26,12 @@ const bar = (frac: number, cls = '') => { const b = el('div', `mon-bar ${cls}`),
 const rating = (iv: number[]) => { const p = iv.reduce((a, b) => a + b, 0) / (iv.length * MON.MAX_IV); return p >= 0.9 ? '顶尖' : p >= 0.7 ? '优秀' : p >= 0.45 ? '不错' : '普通'; };
 
 /**
- * 精灵面板：出战队伍（≤6，第 1 只是首发）、精灵背包（≤60）、精灵详情；还没有精灵时先三选一领初始精灵。
+ * 精灵（背包里的「精灵」页）：出战队伍（≤6，第 1 只是首发）、精灵背包（≤60）、精灵详情；还没有精灵时先三选一领初始精灵。
  * 界面只显示服务器给的数据；整理（移动/排序/昵称/放生）都只是向服务器发请求，成功后服务器推回整份最新数据。
- * 电脑按 R 或点菜单「精灵」，手机点 ☰ → 精灵。
+ * 电脑按 R、手机点 ☰ → 背包 → 精灵都会打开背包并切到这一页（2026-11-10 起不再有单独的菜单入口）。
  */
-export class MonPanel {
-  private root = el('div', 'screen hidden');
+export class MonPanel implements Section {
+  readonly view = el('div', 'mon-sec');
   private body = el('div', 'mon-body');
   private msg = el('div', 'mon-msg');
   private data: MonData | null = null;
@@ -37,37 +39,65 @@ export class MonPanel {
   private picked: string | null = null;
   private confirmFree: string | null = null;
   private freeTimer = 0;
+  private host: Host<'mons'> | null = null;
+  /** 正在给哪只精灵的哪个槽选技能（drop = -1 表示空槽） */
+  private replacePick: { id: string; drop: number } | null = null;
+  private pending = false;
+  private pendingTimer = 0;
   /** 数据更新时通知（猫面板据此刷新「收服/对战」按钮） */
   onData: (() => void) | null = null;
 
   constructor(private net: NetClient) {
-    const panel = el('div', 'box mon');
-    const head = el('div', 'board-head');
-    const close = el('button', 'btn', '✕'); close.type = 'button'; close.setAttribute('aria-label', '关闭精灵面板');
-    close.addEventListener('click', () => this.close());
-    head.append(el('div', 'board-title', '精灵'), close);
-    panel.append(head, this.msg, this.body);
-    this.root.append(panel);
-    this.root.addEventListener('mousedown', (e) => { if (e.target === this.root) this.close(); });
-    window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && this.isOpen) this.close(); });
-    (document.getElementById('hud') ?? document.body).append(this.root);
-    ui.add({ id: 'mons', label: '精灵', key: 'R', run: () => this.toggle() });
-    net.handlers.mon = (d) => { this.data = d; ui.badge('mons', d.starter ? 0 : 1); if (this.picked && !this.find(this.picked)) this.picked = null; this.render(); this.onData?.(); };
-    net.handlers.monResult = (ok, text) => { this.say(text, ok); };
+    this.view.append(this.msg, this.body);
+    net.handlers.mon = (d) => {
+      this.pending = false; window.clearTimeout(this.pendingTimer); this.replacePick = null;
+      this.data = d; ui.badge('bag', d.starter ? 0 : 1); // 还没领初始精灵：背包入口亮红点
+      if (this.picked && !this.find(this.picked)) this.picked = null;
+      this.render(); this.onData?.();
+    };
+    net.handlers.monResult = (ok, text) => {
+      this.pending = false; window.clearTimeout(this.pendingTimer);
+      this.replacePick = null;
+      this.say(text, ok); this.render();
+    };
     this.render();
   }
 
-  get isOpen() { return !this.root.classList.contains('hidden'); }
+  /** 接到背包上（场景创建完背包后调用） */
+  attach(host: Host<'mons'>) { this.host = host; }
+  /** 还没领初始精灵（背包的「精灵」页签上亮红点用） */
+  get needsStarter() { return !!this.data && !this.data.starter; }
+  /** 只读：给图鉴页取 dex（不改数据） */
+  get monData(): MonData | null { return this.data; }
+  get isOpen() { return !!this.host?.isOpenOn('mons'); }
   /** 已经收服过的校园猫编号 / 队伍里有没有还能战斗的猫系精灵（「老吴对战」的条件） */
   get tamed(): readonly number[] { return this.data?.tamed ?? []; }
   get hasCatSpirit(): boolean { return !!this.data?.sq.some((m) => isCatSpecies(m.sp) && m.hp > 0); }
-  open() { this.root.classList.remove('hidden'); this.net.monGet(); this.render(); }
-  close() { this.root.classList.add('hidden'); this.confirmFree = null; }
+  open() { this.host?.open('mons'); }
+  close() { if (this.isOpen) { this.confirmFree = null; this.replacePick = null; this.pending = false; window.clearTimeout(this.pendingTimer); this.host?.close(); } }
   toggle() { this.isOpen ? this.close() : this.open(); }
+  /** 背包切到精灵页时：取一次最新数据 */
+  enter() { this.net.monGet(); this.render(); }
   /** 连上服务器后请求一次（用来在菜单上亮"还没领初始精灵"的红点） */
   refresh() { this.net.monGet(); }
 
   private find(id: string): Mon | undefined { return this.data?.sq.find((m) => m.id === id) ?? this.data?.bx.find((m) => m.id === id); }
+  /** 这只精灵服务端下发的可学技能（已过滤未知 / 已带 / 重复） */
+  private learnableFor(m: Mon): string[] { return filterLearnable(this.data?.learnable?.[m.id], CONTENT, m.mv); }
+  /** 发替换请求；等服务器推回 mon_data，不做本地修改 */
+  private requestReplace(id: string, move: string, drop: number) {
+    if (this.pending) return;
+    this.pending = true;
+    this.net.monReplace(id, move, drop);
+    this.render();
+    window.clearTimeout(this.pendingTimer);
+    this.pendingTimer = window.setTimeout(() => {
+      if (!this.pending) return;
+      this.pending = false;
+      this.say('服务器没有响应，请稍后再试', false);
+      this.render();
+    }, 8000);
+  }
   private say(text: string, ok: boolean) { this.msg.textContent = text; this.msg.className = `mon-msg ${ok ? 'ok' : 'bad'}`; }
   private btn(label: string, run: () => void, cls = 'btn') { const b = el('button', cls, label); b.type = 'button'; b.addEventListener('click', run); return b; }
 
@@ -163,13 +193,39 @@ export class MonPanel {
     for (const k of STAT_KEYS.filter((x) => x !== 'hp')) { stats.append(el('div', 'mon-srow', `${STAT_NAMES[k]}  ${st[k]}`), bar(st[k] / 200)); }
     stats.append(el('div', 'mon-srow', cap ? '经验  已满级' : `经验  ${m.xp - lo}/${hi - lo}`), bar(cap ? 1 : (m.xp - lo) / Math.max(1, hi - lo), 'xp'));
     box.append(stats);
+    const learn = this.learnableFor(m);
     const moves = el('div', 'mon-moves');
-    for (const x of m.mv) {
+    for (const [i, x] of m.mv.entries()) {
       const mv = CONTENT.moves.get(x.id); if (!mv) continue;
       const r = el('div', 'mon-move'); r.append(typeBadge(mv.type), el('span', 'mon-mname', mv.name), el('span', 'mon-mmeta', `${mv.cat === 'physical' ? '物理' : '特殊'} 威力${mv.power} 命中${mv.acc}  PP ${x.pp}/${mv.pp}`));
+      if (learn.length) {
+        const b = this.btn('更换', () => { this.replacePick = { id: m.id, drop: i }; this.render(); }, 'btn sm');
+        b.disabled = this.pending; r.append(b);
+      }
       moves.append(r);
     }
     box.append(el('div', 'mon-h', '技能'), moves);
+    if (learn.length && m.mv.length < moveSlots(sp)) {
+      const b = this.btn('学习新技能', () => { this.replacePick = { id: m.id, drop: -1 }; this.render(); }, 'btn');
+      b.disabled = this.pending; box.append(b);
+    }
+    const pick = this.replacePick?.id === m.id ? this.replacePick : null;
+    if (pick) {
+      const wrap = el('div', 'mon-pend');
+      const oldName = pick.drop >= 0 ? CONTENT.moves.get(m.mv[pick.drop]?.id ?? '')?.name ?? '技能' : '';
+      wrap.append(el('div', 'mon-h', pick.drop === -1 ? '学习新技能' : `更换「${oldName}」`));
+      const grid = el('div', 'mon-learn');
+      for (const id of learn) {
+        const mv = CONTENT.moves.get(id); if (!mv) continue;
+        const b = this.btn('', () => this.requestReplace(m.id, id, pick.drop), 'btn mon-learn-btn');
+        b.append(typeBadge(mv.type), el('span', 'mon-mname', mv.name), el('span', 'mon-mmeta', `${mv.cat === 'physical' ? '物理' : '特殊'} 威力${mv.power} 命中${mv.acc}`));
+        b.disabled = this.pending; grid.append(b);
+      }
+      const cancel = this.btn('取消', () => { this.replacePick = null; this.render(); }, 'btn sm');
+      cancel.disabled = this.pending;
+      wrap.append(grid, cancel);
+      box.append(wrap);
+    }
     const when = m.at > 0 ? new Date(m.at).toLocaleDateString() : '';
     box.append(el('div', 'mon-sub', `个体评价：${rating(m.iv)}${when ? `　遇见于 ${when}` : ''}`));
     // 昵称

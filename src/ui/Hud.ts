@@ -26,10 +26,11 @@ export class Hud {
     e.textContent = String(n);
     if (up) { box.classList.remove('pop'); void box.offsetWidth; box.classList.add('pop'); }
   }
-  setClock(day: number, hhmm: string, phase: string, extra?: { season: string; weather: string; place: string }) {
+  setClock(day: number, hhmm: string, phase: string, extra?: { season: string; weather: string; place: string; fest?: string }) {
     $('clock-day').textContent = extra ? `第 ${day} 天 · ${extra.season}` : `第 ${day} 天`;
     $('clock-time').textContent = hhmm;
     $('clock-phase').textContent = extra ? `${phase} · ${extra.weather}` : phase;
+    const fest = document.getElementById('clock-fest'); if (fest && fest.textContent !== (extra?.fest ?? '')) fest.textContent = extra?.fest ?? '';
     const place = $('clock-place'); // 文字没变就不写 DOM
     const txt = extra ? `📍 ${extra.place}` : '';
     if (place.textContent !== txt) place.textContent = txt;
@@ -95,7 +96,7 @@ export class Hud {
     [...extra].sort((a, b) => b.area - a.area).forEach((e, i) => mk(e.name, e.x, e.y, true, 1 + i));
     // 手机：大地图右上角的"×"，管理员模式下点图是传送，所以需要一个明确的关闭按钮
     const close = document.createElement('div');
-    close.id = 'minimap-close'; close.textContent = '×';
+    close.id = 'minimap-close'; close.textContent = '×'; close.title = '关闭（Esc / M）'; close.setAttribute('aria-label', '关闭地图');
     close.addEventListener('click', (e) => { e.stopPropagation(); if (this.mapBig) this.toggleMap(); });
     mm.appendChild(close);
     // 点小地图 = 打开大地图（stopImmediatePropagation：别让后面"管理员点图传送"的监听把这一下也当成选点）。

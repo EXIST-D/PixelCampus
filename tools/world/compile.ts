@@ -11,7 +11,7 @@ import * as N from '../art/nature.ts';
 import * as P from '../art/props.ts';
 import * as PZ from '../art/plaza.ts';
 import { renderWing, type WingSpec } from '../art/buildings.ts';
-import { pack, packPages, type PackItem } from '../art/pack.ts';
+import { pack, packPagesOrdered, type PackItem } from '../art/pack.ts';
 import { CACHE, ROOT } from '../paths.ts';
 import { scaleTerrain, scaleBuildings, scalePois } from './scale.ts';
 import { MaterialMap, MID, MATS, TILE, paintShapes, renderRegion, waterDistance } from './terrain.ts';
@@ -109,12 +109,14 @@ function defaultRoofTone(b: BuildingDef): number {
   const t = table[b.kind] ?? [0];
   return t[h % t.length];
 }
+/** 建筑 id → 室内 id（data/campus/interior-links.json）：在手动层 / baked 层之后套用，编辑器改建筑不会丢这个对应 */
+const INTERIOR_LINKS: Record<string, string> = (() => { const f = join(ROOT, 'data', 'campus', 'interior-links.json'); if (!existsSync(f)) return {}; return Object.fromEntries(Object.entries(JSON.parse(readFileSync(f, 'utf8')) as Record<string, string>).filter(([k]) => !k.startsWith('_'))); })();
 const OPEN_INTERIORS = new Set<string>();
 { const dir = join(ROOT, 'data', 'interiors'); if (existsSync(dir)) for (const f of readdirSync(dir).filter((x) => x.endsWith('.json'))) { const j = JSON.parse(readFileSync(join(dir, f), 'utf8')); if (j.open && j.id) OPEN_INTERIORS.add(j.id); } }
 for (const b of buildings) {
   // 室内系统暂停开发：默认不暴露入口。设置 INTERIORS=1 可开启（室内场景尚未通过验收）。
   // 室内：INTERIORS=1 时按旧规则全开；否则只开放 data/interiors/*.json 里写了 "open": true 的那几间（目前试点：42 号楼 → 数学建模协会 214）
-  const interior = process.env.INTERIORS === '1' ? (b.interior ?? (b.kind === 'teaching' ? 'classroom' : b.kind === 'canteen' ? 'canteen' : undefined)) : (b.interior && OPEN_INTERIORS.has(b.interior) ? b.interior : undefined);
+  const interior = process.env.INTERIORS === '1' ? (b.interior ?? (b.kind === 'teaching' ? 'classroom' : b.kind === 'canteen' ? 'canteen' : undefined)) : ((INTERIOR_LINKS[b.id] ?? b.interior) && OPEN_INTERIORS.has((INTERIOR_LINKS[b.id] ?? b.interior)!) ? (INTERIOR_LINKS[b.id] ?? b.interior) : undefined);
   const editorSpecs: Record<string, unknown>[] = [];
   editorOut.push({ id: b.id, name: b.name, kind: b.kind, sign: b.sign, desc: b.desc, fixed: b.fixed, interior: b.interior, wings: editorSpecs });
   const out: BuildingOut = { id: b.id, name: b.name, kind: b.kind, desc: b.desc, interior, wings: [], doors: [], bbox: { x: 1e9, y: 1e9, w: 0, h: 0 } };
@@ -623,10 +625,16 @@ mkdirSync(CACHE, { recursive: true });
 writeFileSync(hashFile, JSON.stringify(hashes));
 
 // ------------------------------------------------------------ 7. 图集 + 小地图 + world.json
-const bPages = packPages(buildingSprites, 2048, 4096);
+// 建筑图集按"离出生点由近到远"分成很多小页（每页 ≤1024 高），客户端启动时只下载出生点附近用到的页，其余按需加载（世界里走到哪、加载哪页）
+const spawn0 = pois.find((p) => p.kind === 'spawn'), spX = (spawn0?.x ?? TW / 2) * TILE, spY = (spawn0?.y ?? TH / 2) * TILE;
+const wingPos = new Map<string, { x: number; y: number }>();
+for (const bo of buildingsOut) for (const w of bo.wings) wingPos.set(w.k, { x: w.x, y: w.y });
+const spriteDist = (it: PackItem) => { const p = wingPos.get(it.key)!; return Math.hypot(p.x + it.img.w / 2 - spX, p.y + it.img.h / 2 - spY); };
+const bPages = packPagesOrdered([...buildingSprites].sort((a, b) => spriteDist(a) - spriteDist(b)), 2048, 1024);
 for (let i = 0; i < bPages.length; i++) { await bPages[i].img.save(join(OUTDIR, `atlas-buildings-${i}.png`)); writeFileSync(join(OUTDIR, `atlas-buildings-${i}.json`), JSON.stringify(bPages[i].json)); }
 const pageOf: Record<string, number> = Object.assign({}, ...bPages.map((p) => p.pageOf));
-for (const bo of buildingsOut) for (const w of bo.wings) w.pg = pageOf[w.k];
+const spriteSize = new Map(buildingSprites.map((it) => [it.key, it.img] as const));
+for (const bo of buildingsOut) for (const w of bo.wings) { w.pg = pageOf[w.k]; const im = spriteSize.get(w.k)!; w.w = im.w; w.h = im.h; }
 // 道具图集：每个季节一张（树叶/灌木换色），帧名与布局完全相同，所以共用一份 json
 const propsJson = new Map<string, string>();
 for (const season of SEASONS) {

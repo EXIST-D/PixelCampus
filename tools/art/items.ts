@@ -3,6 +3,11 @@
  * 新增物品：在 ICONS 里加同名的绘制函数。
  */
 import { Img, hex } from './px.ts';
+import { DECOR } from '../../src/shared/decor.ts';
+import { FURNITURE } from './furniture.ts';
+import { OFFICE_FURNITURE } from './furniture-office.ts';
+import { DECOR_FURNITURE } from './furniture-decor.ts';
+import { DORM_FURNITURE } from './furniture-dorm.ts';
 
 const O = hex('#2a1f2e');
 
@@ -363,6 +368,21 @@ function catBed(): Img {
   return i;
 }
 
+/** 染料：一个小瓶子（玻璃瓶身、软木塞），瓶里是彩虹渐变的颜料，瓶口挂着一滴 */
+function dyeBottle(): Img {
+  const i = new Img(16, 16);
+  const glass = hex('#e8f2f8'), glassD = hex('#9ab4c4'), cork = hex('#c89a5a'), corkD = hex('#8a6438');
+  const paint = ['#e8506a', '#f09a3a', '#f4d84a', '#5ab870', '#4a9ae0', '#9a6ad0'].map(hex);
+  i.set(7, 1, corkD); i.set(8, 1, corkD); i.set(6, 2, cork); i.set(7, 2, cork); i.set(8, 2, cork); i.set(9, 2, cork); // 软木塞
+  for (let x = 5; x <= 10; x++) i.set(x, 3, glassD);          // 瓶口
+  i.set(6, 4, glass); i.set(7, 4, glass); i.set(8, 4, glass); i.set(9, 4, glass); i.set(5, 4, glassD); i.set(10, 4, glassD);
+  for (let y = 5; y <= 14; y++) { const w = y < 7 ? 3 + (y - 5) : 5; for (let x = 8 - w; x < 8 + w; x++) i.set(x, y, x === 8 - w || x === 8 + w - 1 ? glassD : glass); }
+  for (let x = 3; x < 13; x++) i.set(x, 15, glassD);          // 瓶底
+  for (let y = 8; y <= 14; y++) for (let x = 4; x < 12; x++) i.set(x, y, paint[Math.min(5, Math.floor(((x - 4) + (y - 8) * 0.4) / 1.4) % 6)]); // 瓶里的颜料
+  i.set(6, 6, hex('#ffffff')); i.set(6, 7, hex('#ffffff')); // 高光
+  return i;
+}
+
 // ================= 钓鱼 2.0 新增图标 =================
 const CLAM = art([
   '................', '................', '................',
@@ -649,7 +669,7 @@ export const ICONS: Record<string, () => Img> = {
   fish_yinglong: serpent('#e8b830', '#fff0a0', { from: 1, to: 15, thick: 3, amp: 3.2, period: 3, head: '#f4d050', whisk: true, horn: true, spine: '#e0602a' }),
   fish_guppy: fish('#e87a3a', '#ffd8a0', '#4a9ae8', 'dots', 0.6), fish_neon: fish('#2a3a6a', '#c8d8f0', '#3a9af0', 'stripe', 0.55), fish_oranda: fish('#f4f0e8', '#ffffff', '#e8483a', 'fat'),
   fish_butterfly: fish('#e87a4a', '#fff0d8', '#4a6ad8', 'koi'), fish_discus: fish('#e89a3a', '#fce8b0', '#2a8a9a', 'flat'),
-  bait_pro: baitPro, cat_bed: catBed,
+  bait_pro: baitPro, cat_bed: catBed, dye: dyeBottle,
   cat_food: catFood, cat_treat: catTreat, mon_ball: monBall, ginkgo_leaf: ginkgoLeaf, cat_badge: catBadge,
   fishing_rod: rod, bait, junk_boot: boot, junk_weed: weed,
   fish_crucian: fish('#b8a878', '#e8e0c0', '#8a7a50', 'fat'),
@@ -680,6 +700,23 @@ export const ICONS: Record<string, () => Img> = {
   junk_can: CAN, junk_bottle: BOTTLE,
   trash_paper: PAPER, trash_cup: CUP, trash_wrapper: WRAPPER, trash_peel: PEEL, trash_chopsticks: chopsticks, bin_usb: USB,
 };
+
+/** 宿舍家具的背包图标：把家具精灵按面积平均缩进 16×16（保持比例、居中），再和别的图标一样描边 */
+function decorIcon(k: string): Img {
+  const src = ({ ...FURNITURE, ...OFFICE_FURNITURE, ...DORM_FURNITURE, ...DECOR_FURNITURE })[k]().img;
+  const s = Math.max(1, Math.max(src.w, src.h) / 16), nw = Math.max(1, Math.min(16, Math.round(src.w / s))), nh = Math.max(1, Math.min(16, Math.round(src.h / s)));
+  const out = new Img(16, 16), ox = (16 - nw) >> 1, oy = (16 - nh) >> 1;
+  for (let y = 0; y < nh; y++) for (let x = 0; x < nw; x++) {
+    let r = 0, g = 0, b = 0, a = 0, n = 0;
+    for (let sy = Math.floor((y * src.h) / nh); sy < Math.max(Math.floor((y * src.h) / nh) + 1, Math.floor(((y + 1) * src.h) / nh)); sy++)
+      for (let sx = Math.floor((x * src.w) / nw); sx < Math.max(Math.floor((x * src.w) / nw) + 1, Math.floor(((x + 1) * src.w) / nw)); sx++) {
+        const p = src.get(sx, sy); n++; a += p[3]; r += p[0] * p[3]; g += p[1] * p[3]; b += p[2] * p[3];
+      }
+    if (n && a / n >= 110) out.set(ox + x, oy + y, [Math.round(r / a), Math.round(g / a), Math.round(b / a), 255]);
+  }
+  return out;
+}
+for (const d of DECOR) ICONS[d.id] = () => decorIcon(d.k);
 
 /** 成品：描边后的图标 */
 export function buildItemIcon(id: string): Img { return ICONS[id]().outlinedSoft(0.4, [40, 28, 64, 255]); }

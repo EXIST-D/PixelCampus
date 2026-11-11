@@ -9,13 +9,14 @@
   <meta name="description" content="像素校园 · 河北工程大学新校区 —— 星露谷风格的像素校园网页游戏。作者 EXIST-D" />
   <link rel="author" href="https://github.com/EXIST-D" />
   <title>像素校园 · 河北工程大学新校区</title>
+  <link rel="preload" as="image" href="splash.webp" type="image/webp" />
   <link rel="stylesheet" href="/src/ui/style.css" />
 </head>
 <body>
   <div id="game"></div>
   <div id="hud">
     <div id="banner" class="box hidden"><div id="banner-title"></div><div id="banner-sub"></div></div>
-    <div id="clock" class="box"><div id="clock-day">第 1 天</div><div id="clock-time">08:00</div><div id="clock-phase"></div><div id="clock-place"></div></div>
+    <div id="clock" class="box"><div id="clock-day">第 1 天</div><div id="clock-time">08:00</div><div id="clock-phase"></div><div id="clock-place"></div><div id="clock-fest"></div></div>
     <div id="coin-pill" class="box" title="校园币"><span class="coin-ico"></span><span id="coin-n">0</span></div>
     <div id="hint" class="box hidden"></div>
     <div id="controls">WASD / 方向键 移动 · Shift 奔跑 · E 互动 · I 背包 · J 成就 · Q 任务 · T 组队 · X 表情 · P 拍照 · Z 沉浸 · Enter 聊天 · C 学生证 · M 地图 · +/- 缩放</div>
@@ -25,7 +26,7 @@
       <div id="dialog-body"></div>
       <div id="dialog-foot">按 E 或 Esc 关闭</div>
     </div>
-    <div id="loading"><div id="loading-title">像素校园</div><div id="loading-bar"><div id="loading-fill"></div></div><div id="loading-text">加载中…</div><div id="loading-credit">© 2026 EXIST-D · github.com/EXIST-D</div></div>
+    <div id="loading"><img id="loading-art" src="splash.webp" alt="" decoding="async" /><div id="loading-title">像素校园</div><div id="loading-bar"><div id="loading-fill"></div></div><div id="loading-text">加载中…</div><div id="loading-credit">© 2026 EXIST-D · github.com/EXIST-D</div></div>
   </div>
   <script type="module" src="/src/main.ts"></script>
 </body>

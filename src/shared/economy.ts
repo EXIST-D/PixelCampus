@@ -1,11 +1,12 @@
 /**
- * 货币与商店（客户端与服务器共用）——设计见 docs/ECONOMY.md。
+ * 货币与商店（客户端与服务器共用）——设计见 docs/design/ECONOMY.md。
  * 货币叫「校园币」，整数，存在服务器的玩家档案里（跟着身份走）；增减全部由服务器按这里的规则执行。
  * 客户端只显示：价格表和"今日行情"都是这里的纯函数，客户端和服务器算出来一样（以服务器结算为准）。
  */
 import { FISH, fishDef, type FishDef, type Rarity } from './fishing';
 import { TACKLES } from './gear';
 import { itemDef } from './items';
+import { DECOR, decorRefund } from './decor';
 import { TREASURE_ID, TRASH_ONLY, trashPrice } from './trash';
 
 /** 日期编号：东八区的"第几天"，换日以北京时间 0 点为界（和服务器 progress.dayNo 一致） */
@@ -35,6 +36,7 @@ export const EXTRA_SELL: Readonly<Record<string, number>> = { pearl: 120, relic_
 /** 今天卖一条这个物品能得多少币；不收的东西返回 0 */
 export function sellPrice(id: string, day: number, bonus = 0): number {
   if (EXTRA_SELL[id]) return EXTRA_SELL[id];
+  { const r = decorRefund(id); if (r) return r; } // 宿舍家具：商店按原价的一半收回（没有行情、没有加成）
   const tp = trashPrice(id); // 翻垃圾桶翻出来的东西：垃圾 1 币、U 盘 999 币，没有行情
   if (tp) return tp;
   const d = fishDef(id);
@@ -44,8 +46,8 @@ export function sellPrice(id: string, day: number, bonus = 0): number {
 }
 /** 一天里在商店卖东西累计赚到这么多校园币，解锁成就「日进九百九」 */
 export const DAILY_SALE_GOAL = 999;
-/** 一次最多卖多少件（防一条消息处理过久；背包堆叠上限本来就是 99） */
-export const SELL_MAX = 99;
+/** 一次最多卖多少件（防一条消息处理过久；和背包堆叠上限一样 999） */
+export const SELL_MAX = 999;
 /** "一键卖出"只收这些稀有度的鱼（稀有及以上舍不得，要卖请手动点） */
 export const BULK_RARITIES: readonly Rarity[] = ['junk', 'common', 'uncommon'];
 
@@ -80,6 +82,8 @@ export const SHOP: readonly ShopItem[] = [
   { id: 'cat_food', n: 5, price: 12, note: '一份 5 包猫粮（每天第一次登录补到 5 包）' },
   { id: 'cat_treat', n: 2, price: 30, note: '2 根猫条，小猫最爱，好感涨得多' },
   { id: 'cat_bed', n: 1, price: 150, note: '送给一只小猫：它有了自己的窝（只有你看得到），好感 +20' },
+  // 染料：一份染一件家具。定价依据——便宜的家具 15~30 币（垃圾桶、凳子、椅子），所以一份约 13 币（3 份 40）：染一次约等于最便宜家具的价钱，大件、贵的家具染一次也一样，鼓励"买一件好家具再慢慢调色"
+  { id: 'dye', n: 3, price: 40, note: '3 份染料：装修时把一件家具染成喜欢的颜色（一件一份；染回原色免费；收回背包会褪色）' },
   { id: 'fishing_rod', n: 1, price: 40, note: '备用的竹节鱼竿' },
   { id: 'rod_carbon', n: 1, price: 420, note: '拉鱼更轻松、咬钩更快、稀有鱼更多，带 1 个配件槽' },
   { id: 'rod_glow', n: 1, price: 900, note: '萤火竿：夜里咬钩快、夜行鱼多（白天没有加成）' },
@@ -87,6 +91,7 @@ export const SHOP: readonly ShopItem[] = [
   { id: 'rod_pickup', n: 1, price: 1500, note: '拾遗竿：更容易钓到盲盒' },
   { id: 'rod_golden', n: 1, price: 1800, note: '金龙鱼竿：拉鱼大幅放宽、咬钩最快、稀有鱼显著增多' },
   ...TACKLES.map((t) => ({ id: t.id, n: 1, price: t.price, note: `${t.eff}（配件，不消耗；要有带配件槽的鱼竿才能装）` })),
+  ...DECOR.filter((d) => d.price > 0).map((d) => ({ id: d.id, n: 1, price: d.price, note: d.note })), // 宿舍家具（图书馆广场的校园商店卖）
 ];
 const SHOP_BY_ID = new Map(SHOP.map((s) => [s.id, s]));
 export const shopItem = (id: unknown): ShopItem | undefined => (typeof id === 'string' ? SHOP_BY_ID.get(id) : undefined);
@@ -94,12 +99,13 @@ export const shopItem = (id: unknown): ShopItem | undefined => (typeof id === 's
 export const CAT_BED_GAIN = 20;
 
 /** 该件东西在背包里能不能卖（收鱼、杂物，和翻垃圾桶翻出来的东西） */
-export const sellable = (id: string): boolean => !!fishDef(id) || trashPrice(id) > 0 || (EXTRA_SELL[id] ?? 0) > 0;
+export const sellable = (id: string): boolean => !!fishDef(id) || trashPrice(id) > 0 || (EXTRA_SELL[id] ?? 0) > 0 || decorRefund(id) > 0;
 /** 一键卖出收的东西：杂物、常见、少见的鱼，和翻出来的垃圾（U 盘舍不得，要卖手动点） */
 export const bulkSellable = (id: string): boolean => { const d = fishDef(id); return d ? BULK_RARITIES.includes(d.rarity) : TRASH_ONLY.includes(id); };
 export function sellList(inv: Record<string, number>, day: number, bonus = 0): { id: string; name: string; n: number; price: number; rarity: Rarity }[] {
   const out: { id: string; name: string; n: number; price: number; rarity: Rarity }[] = FISH.filter((f) => (inv[f.id] ?? 0) > 0).map((f) => ({ id: f.id, name: f.name, n: inv[f.id], price: sellPrice(f.id, day, bonus), rarity: f.rarity }));
   for (const id of [...Object.keys(EXTRA_SELL), ...TRASH_ONLY, TREASURE_ID]) if ((inv[id] ?? 0) > 0) out.push({ id, name: itemDef(id)?.name ?? id, n: inv[id], price: sellPrice(id, day), rarity: id === TREASURE_ID || EXTRA_SELL[id] ? 'rare' : 'junk' });
+  for (const d of DECOR) if ((inv[d.id] ?? 0) > 0 && decorRefund(d.id) > 0) out.push({ id: d.id, name: d.name, n: inv[d.id], price: decorRefund(d.id), rarity: 'rare' }); // 宿舍家具：退货（原价的一半）
   return out;
 }
 /** 钓具摊（精工湖边）卖的东西：商店里所有钓鱼相关的商品（鱼竿 / 鱼饵 / 配件）；图书馆广场的商店照旧卖全部 */

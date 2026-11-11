@@ -6,12 +6,15 @@
  * 坐标单位是世界像素，二进制里按 1/4 像素定点存 u16（世界最大约 11264 px × 4 = 45056，装得下）。
  */
 import type { Profile } from './profile';
+import type { BathView, DormCard } from './dorm';
+import type { Placed } from './decor';
 import type { BoardItem } from './board';
-import type { WallComment, WallPost } from './wall';
+import type { WallComment, WallPost, WallSort } from './wall';
+import type { PlaceComment, PlacePost } from './place';
 import type { Notice } from './notice';
 import type { ChatHistoryItem, DmMsg, FriendInfo, PersonInfo } from './social';
 import type { Gain, Inv } from './items';
-import type { CatResult } from './cats';
+import type { CatInfo, CatResult } from './cats';
 import type { AchEvent } from './achievements';
 import type { QuestState } from './quests';
 import type { FishLog } from './fishing';
@@ -36,14 +39,15 @@ import type { DexEntry } from './monbox';
  * 9：聊天频道（chat 带 ch、channels、ch_set；队伍 / 附近的话不能漏进旧页面的公屏）
  * 10：钓鱼 2.0（神话鱼、配件、盲盒、合成、册页；装备栏多了配件和指名目标，旧页面不认识）
  * 11：钓鱼 3.0（钓鱼等级与路线、钓具老板的每日 / 每周委托、放生）
+ * 12：宿舍第四批（房间里没有固定家具了：床、衣柜、窗…都在摆放数据里；室内底图不再画窗/地毯/门垫；屋里坐姿位；旧页面画不出新宿舍，必须刷新）
  */
-export const PROTOCOL_VERSION = 11;
+export const PROTOCOL_VERSION = 12;
 
 /** 一个委托给客户端看的样子 */
 export interface CommView { id: CommTier; tier: CommTier; name: string; desc: string; goal: number; prog: number; done: boolean; claimed: boolean; reward: CommReward }
 
 /** 宿舍里的一位玩家（和 spawn 消息同一套字段，位置是屋里的坐标） */
-export interface RoomWho { id: number; uid: number; x: number; y: number; flags: number; p: PublicProfile; ttl?: string; held?: number }
+export interface RoomWho { id: number; uid: number; x: number; y: number; flags: number; p: PublicProfile; ttl?: string; held?: number; fz?: number; /** 正在保持的持续型表情（躺下 / 坐地）的编号；没有就没有这个字段 */ pose?: number }
 
 export const NET = {
   /** 服务器快照频率（Hz） */
@@ -145,6 +149,8 @@ export type ClientMsg =
   | { t: 'notice_publish'; title: string; body: string }
   | { t: 'notice_edit'; id: number; title: string; body: string }
   | { t: 'notice_del'; id: number }
+  /** 站长编写「关于」页的致谢（thanks = null：恢复默认） */
+  | { t: 'about_thanks_set'; thanks: string[] | null }
   | { t: 'social_get' }
   | { t: 'whois'; uid: number }
   | { t: 'friend_req'; uid: number }
@@ -163,6 +169,10 @@ export type ClientMsg =
   | { t: 'cats_get' }
   | { t: 'cat_pet'; id: number }
   | { t: 'cat_feed'; id: number; item: string }
+  /** 抱抱（挚友以上；服务器回 cat_result，kind = 'hug'） */
+  | { t: 'cat_hug'; id: number }
+  /** 喂水禽（精工湖的鸭子 / 天鹅；id 见 shared/waterfowl.ts）：消耗 1 份鱼饵，服务器回 bird_result */
+  | { t: 'bird_feed'; id: number }
   /** 让亲密的小猫跟着我 / 回家；给它取专属名字（空 = 清除） */
   | { t: 'cat_follow'; id: number; on: boolean }
   | { t: 'cat_nick'; id: number; name: string }
@@ -177,6 +187,9 @@ export type ClientMsg =
   | { t: 'emote'; e: number }
   /** 手持物（编号见 held.ts，0 = 放下）：只是外观，服务器转发给看得见我的人 */
   | { t: 'held'; h: number }
+  /** 节日装扮：要状态 / 戴上（c = 装扮编号，0 = 脱下；没获得的会被拒） */
+  | { t: 'fz_get' }
+  | { t: 'fz_set'; c: number }
   /** 钓鱼：抛竿（朝向取服务器记的）/ 收竿 / 收线放弃；钓鱼图鉴 */
   | { t: 'fish_cast' }
   | { t: 'fish_reel' }
@@ -193,7 +206,7 @@ export type ClientMsg =
   /** 钓鱼装备栏：给某一格选一件（id = '' 表示自动，用背包里最低级的）；slot 'tackle' = 配件（点一下装上、再点取下，id '' = 全部取下）、'target' = 指名饵要咬的那种鱼 */
   | { t: 'equip_set'; slot: 'rod' | 'bait' | 'tackle' | 'target'; id: string }
   /** 钓鱼 2.0：打开背包里的一个盲盒；合成（recipe 见 craft.ts，param = 指名饵选的鱼）；装备图鉴；领钓鱼册页的奖励 */
-  | { t: 'box_open'; id: string }
+  | { t: 'box_open'; id: string; /** 一次开几个（缺省 1，最多 BOX_BATCH_MAX） */ n?: number }
   | { t: 'craft'; recipe: string; param?: string }
   | { t: 'geardex_get' }
   | { t: 'bundle_claim'; id: string }
@@ -210,7 +223,7 @@ export type ClientMsg =
   | ({ t: 'trade_offer'; tid: number } & TradeOffer)
   | { t: 'trade_ready'; tid: number; on: boolean }
   /** 校园墙：看一页帖子 / 打开一条帖子 / 发帖（anon = 匿名）/ 评论 / 点赞（再点取消）/ 删除（c = 评论 id）/ 举报 / 管理员删某作者全部 */
-  | { t: 'wall_list'; before?: number; /** 管理员：只看待审核的 */ pending?: boolean }
+  | { t: 'wall_list'; before?: number; /** 管理员：只看待审核的 */ pending?: boolean; /** 排序：new（默认）/ hot；hot 翻页用 off（偏移）+ at（第一页返回的时间，保证翻页时排名不变） */ sort?: WallSort; off?: number; at?: number }
   | { t: 'wall_review'; id: number; ok: boolean }
   | { t: 'wall_open'; id: number }
   | { t: 'wall_post'; text: string; anon: boolean }
@@ -219,6 +232,19 @@ export type ClientMsg =
   | { t: 'wall_del'; id: number; c?: number }
   | { t: 'wall_report'; id: number; c?: number }
   | { t: 'wall_del_by'; by: string }
+  /** 地点留言板（规则见 shared/place.ts；非管理员要站在这个地点附近才能用）：place_up = 要一张一次性上传券（POST 图片用）；place_open = 打开某地点的留言板 / 翻页（before = 只看比这个 id 更早的；hot 排序翻页用 off + at）；place_thread = 看一条留言和它的评论 */
+  | { t: 'place_up'; key: string }
+  | { t: 'place_open'; key: string; sort?: WallSort; before?: number; off?: number; at?: number }
+  | { t: 'place_thread'; id: number }
+  | { t: 'place_post'; key: string; text: string; /** 已经上传好的图片（每张：place_up 券 + POST 返回的 img；最多 9 张，不能重复）；文字和图片至少要有一样 */ imgs?: string[] }
+  | { t: 'place_comment'; id: number; text: string }
+  | { t: 'place_like'; id: number }
+  | { t: 'place_del'; id: number; c?: number }
+  | { t: 'place_report'; id: number; c?: number }
+  /** 管理员：所有地点的留言总览（tab = all 全部 / pending 待审核 / img 带图的；key 只看某个地点；before = 翻页）；审核（ok = 通过 / 驳回删除）；删某条留言作者的全部留言和评论（id = 那条留言） */
+  | { t: 'place_admin'; tab: 'all' | 'pending' | 'img'; key?: string; before?: number }
+  | { t: 'place_review'; id: number; ok: boolean }
+  | { t: 'place_del_by'; id: number }
   | { t: 'fish_cancel' }
   | { t: 'fishdex_get' }
   /** 校园跑：单人计时 / 先开一场候场（再邀请好友）/ 邀请好友 / 接受 / 拒绝 / 房主开始 / 退出 / 读取我的成绩 */
@@ -254,6 +280,8 @@ export type ClientMsg =
   | { t: 'mon_order'; ids: string[] }
   | { t: 'mon_nick'; id: string; name: string }
   | { t: 'mon_free'; id: string }
+  /** 学 / 换技能：move 必须是服务器下发的 learnable 里的；drop = -1 放空槽，>= 0 替换该下标 */
+  | { t: 'mon_replace'; id: string; move: string; drop: number }
   /** 野外遭遇：迎战 / 走开；战斗行动（bid 与回合号必须是服务器当前的；捕捉的倍率由服务器按背包里的道具定） */
   /** 手拉手：邀请好友 / 接受（uid = 邀请我的人）/ 拒绝 / 松手 */
   | { t: 'hand_invite'; uid: number }
@@ -271,6 +299,16 @@ export type ClientMsg =
   | { t: 'dorm_ac' }
   | { t: 'dorm_sleep'; on: boolean }
   | { t: 'dorm_chest'; op: 'put' | 'take'; id: string; n: number }
+  /** 浴缸放鱼 / 取回（只有房主在自己宿舍里能用） */
+  | { t: 'dorm_bath'; op: 'put' | 'take'; id: string; n: number }
+  /** 装修：place = 从背包摆一件（d = 家具物品 id）/ move = 挪动或转向已摆的第 i 件 / pick = 收回第 i 件 / reset = 一键还原（全部收回背包、房间摆回刚住进来的样子）/ undo = 撤回刚才的一键还原 */
+  /** 给 TA 的宿舍点赞 / 取消赞；设置我的宿舍要不要在资料卡上展示 */
+  | { t: 'dorm_like'; uid: number }
+  /** 买 / 换墙纸（kind = w）和地板（kind = f）：i = 样式下标；扩建房间 */
+  | { t: 'dorm_skin'; kind: 'w' | 'f'; i: number; op: 'buy' | 'use' }
+  | { t: 'dorm_expand' }
+  | { t: 'dorm_pub'; on: boolean }
+  | { t: 'dorm_lay'; op: 'place' | 'move' | 'pick' | 'dye' | 'reset' | 'undo'; d?: string; i?: number; x?: number; y?: number; r?: number; /** 染色：色号 1..12，0 = 染回原色 */ c?: number }
   /** 宿舍做客：邀请好友来我的宿舍（我得在自己宿舍里）/ 敲好友宿舍的门（好友得在宿舍里）/ 回应别人的邀请或敲门 / 房主改门牌 / 在宿舍里报自己的位置（屋里的坐标，像素） */
   /** 切换世界：public = 公共世界，solo = 个人世界；remember = 下次登录也默认进这个世界 */
   | { t: 'world_set'; kind: 'public' | 'solo'; /** 记住这次的选择，下次登录就进这个世界（默认记） */ remember?: boolean }
@@ -284,6 +322,8 @@ export type ClientMsg =
   | { t: 'dorm_knock'; uid: number }
   | { t: 'dorm_reply'; uid: number; accept: boolean }
   | { t: 'dorm_title'; text: string }
+  /** 把好感 ≥ 200 的小猫接回宿舍养（on=true）/ 送回校园（on=false） */
+  | { t: 'dorm_cat'; id: number; on: boolean }
   | { t: 'room_move'; x: number; y: number; flags: number }
   /** 好感度满值时收服一只校园小猫为精灵 / 和一只校园小猫「老吴对战」 */
   | { t: 'cat_tame'; id: number }
@@ -296,7 +336,7 @@ export type ClientMsg =
 export type ServerMsg =
   | { t: 'welcome'; id: number; uid: number; x: number; y: number; online: number }
   /** ttl = 这个玩家佩戴的称号 id（服务器认定的，没戴就没有这个字段） */
-  | { t: 'spawn'; id: number; uid: number; x: number; y: number; flags: number; p: PublicProfile; ttl?: string; /** 手持物（没拿就没有这个字段） */ held?: number }
+  | { t: 'spawn'; id: number; uid: number; x: number; y: number; flags: number; p: PublicProfile; ttl?: string; /** 手持物（没拿就没有这个字段） */ held?: number; /** 节日装扮编号（没戴就没有这个字段） */ fz?: number; /** 正在保持的持续型表情（躺下 / 坐地）的编号 */ pose?: number }
   | { t: 'despawn'; id: number }
   /** ch 不写 = world；party 的话客户端用不同颜色的气泡 */
   | { t: 'chat'; pid: number; uid: number; from: string; hue: number; text: string; ts: number; /** 记录编号（管理员撤回用） */ mid?: number; ch?: ChannelId }
@@ -317,6 +357,8 @@ export type ServerMsg =
   | { t: 'board_del'; ids: number[] }
   /** 公告列表（新的在前）。newId 只在"刚发布了新公告"时带上：在线的玩家据此提示，而不是每次改动都弹窗 */
   | { t: 'notices'; items: Notice[]; newId?: number }
+  /** 「关于」页的致谢（null = 用游戏自带的默认）：进来时发一次，站长改了就广播 */
+  | { t: 'about_thanks'; thanks: string[] | null }
   /** 好友面板的全部数据：好友（含在线/未读/最近一条）、待我处理的申请、我屏蔽的人 */
   | { t: 'social'; friends: FriendInfo[]; incoming: PersonInfo[]; blocked: PersonInfo[] }
   | { t: 'presence'; uid: number; online: boolean }
@@ -327,20 +369,22 @@ export type ServerMsg =
   | { t: 'social_result'; ok: boolean; msg: string }
   /** 别人给我的提示（收到好友申请、申请被通过） */
   | { t: 'social_note'; text: string }
-  | { t: 'whois'; uid: number; info: PersonInfo | null; relation: 'none' | 'self' | 'friend' | 'sent' | 'incoming' | 'blocked' }
+  | { t: 'whois'; uid: number; info: PersonInfo | null; relation: 'none' | 'self' | 'friend' | 'sent' | 'incoming' | 'blocked'; /** TA 的宿舍（没有宿舍、或 TA 选了不展示就没有） */ dorm?: DormCard }
+  /** 某间宿舍的赞数变了（我点赞 / 取消之后）：uid = 房主，n = 现在的赞数，liked = 我现在有没有赞 */
+  | { t: 'dorm_likes'; uid: number; n: number; liked: boolean; /** 结果提示（成功或失败的原因） */ msg?: string }
   | { t: 'chat_history'; items: ChatHistoryItem[] }
   | { t: 'admin'; ok: boolean; msg?: string; token?: string; /** 登录成功时：站长还是协管员 */ role?: AdminRole }
   /** 整个背包（物品 id → 数量）；gain 带上"这次新得到的东西"，客户端据此提示 */
   | { t: 'inv'; items: Inv; gain?: Gain[] }
   /** 各只小猫对我的好感度（猫编号 → 点数） */
-  | { t: 'cats'; aff: Record<string, number>; /** 我送过猫窝的小猫编号 */ beds?: number[] }
+  | { t: 'cats'; aff: Record<string, number>; /** 我送过猫窝的小猫编号 */ beds?: number[]; /** 每只猫"今天的状态"（连续探望天数、今天是否探望/抱过/收过回礼、是否喂到过最爱）；只发有内容的 */ info?: Record<string, CatInfo>; /** 今天已收到几份回礼 / 累计收到几份 */ gifts?: { today: number; total: number } }
   /** 校园币余额；gain = 这次刚得到的数量 */
   | { t: 'coins'; n: number; gain?: number }
   | { t: 'shop_result'; ok: boolean; msg: string }
   /** 我的钓鱼装备栏（'' = 自动） */
   | { t: 'equip'; rod: string; bait: string; tackle: string[]; target: string }
   /** 开盲盒的结果：币、物品、盲盒限定鱼（带尺寸）、重复的东西折成的币（dup）、保底进度（pity / 保底次数 need） */
-  | { t: 'box_result'; id: string; ok: boolean; msg?: string; coins?: number; items?: Gain[]; fish?: { id: string; cm: number; kg: number; isNew: boolean }; dup?: number; gem?: boolean; pity?: number; need?: number }
+  | { t: 'box_result'; id: string; ok: boolean; msg?: string; coins?: number; items?: Gain[]; fish?: { id: string; cm: number; kg: number; isNew: boolean }; dup?: number; gem?: boolean; pity?: number; need?: number; /** 一次开了几个（批量开；缺省 1） */ n?: number; /** 批量里开出几个珍品 */ gems?: number; /** 批量开出的鱼（单开时用 fish） */ fishes?: { id: string; cm: number; kg: number; isNew: boolean }[] }
   | { t: 'craft_result'; ok: boolean; msg: string }
   /** 装备图鉴：拥有过的竿 / 配件、用过的饵、开过的盲盒、保底、已领的册页和神话首奖 */
   | { t: 'geardex'; gd: GearLog }
@@ -361,16 +405,25 @@ export type ServerMsg =
   | { t: 'trade_end'; tid: number; ok: boolean; msg: string }
   /** 交易里的一条提示（报价不合法、邀请被拒之类，不结束交易） */
   | { t: 'trade_note'; msg: string }
-  | { t: 'wall_posts'; items: WallPost[]; more: boolean; append?: boolean; /** 管理员：待审核的帖子数 */ pending?: number }
+  | { t: 'wall_posts'; items: WallPost[]; more: boolean; append?: boolean; /** 管理员：待审核的帖子数 */ pending?: number; /** 这页是按什么排的、是不是待审核栏、热度排序的下一页偏移和排名时间 */ sort?: WallSort; tab?: 'pub' | 'pending'; next?: number; at?: number }
   /** 管理员：有新帖等着审核 */
   | { t: 'wall_pending'; n: number }
   | { t: 'wall_thread'; post: WallPost; comments: WallComment[] }
   | { t: 'wall_result'; ok: boolean; msg: string }
-  | { t: 'cat_result'; id: number; kind: 'pet' | 'feed'; r: CatResult }
+  /** 地点留言板：上传券（POST 到 url，网页根目录下的相对地址，body = packPlaceImg 的包；返回 JSON { ok, img?, msg? }）；一页留言；一条留言和评论；操作结果；管理员总览 */
+  | { t: 'place_up_ticket'; key: string; ticket: string; url: string }
+  | { t: 'place_posts'; key: string; name: string; items: PlacePost[]; more: boolean; append?: boolean; sort: WallSort; at: number; next?: number; /** 这个地点已发布的留言总数 */ total: number }
+  | { t: 'place_thread'; post: PlacePost; comments: PlaceComment[] }
+  | { t: 'place_result'; ok: boolean; msg: string }
+  | { t: 'place_admin_list'; tab: 'all' | 'pending' | 'img'; key?: string; items: PlacePost[]; more: boolean; append?: boolean; /** 待审核的留言数 */ pending: number; /** 全部留言数（含待审核）、图片总数 */ total: number; images: number; /** 有留言的地点（key、名字、条数），做筛选用 */ places: { key: string; name: string; n: number }[] }
+  | { t: 'place_pending'; n: number }
+  | { t: 'cat_result'; id: number; kind: 'pet' | 'feed' | 'hug'; r: CatResult }
   /** 服务器当前时间（毫秒时间戳）：进来时发一次，之后每 30 秒一次；客户端据此校准游戏时钟，让全服时间一致 */
   | { t: 'time'; now: number }
   /** 跟随/取名的结果提示 */
   | { t: 'cat_msg'; ok: boolean; msg: string }
+  /** 喂水禽的结果；left = 今天还能喂几次 */
+  | { t: 'bird_result'; id: number; ok: boolean; msg: string; gifts: Gain[]; left?: number }
   /** 我给小猫取的专属名字（只发给我自己） */
   | { t: 'cat_nicks'; nicks: Record<string, string> }
   /** 谁带着哪只猫：整份（猫编号 → 玩家编号）/ 一只猫变了（pid 0 = 回家了） */
@@ -429,7 +482,13 @@ export type ServerMsg =
   | { t: 'fishdex'; log: Record<string, FishLog> }
   /** 有人（pid = 玩家编号，包括我自己）做了表情 */
   | { t: 'emote'; pid: number; e: number }
+  /** 持续型表情结束了（走动 / 再点一次 / 被传走）：pid 站起来。老客户端不认识这条会忽略 */
+  | { t: 'emote_end'; pid: number }
   | { t: 'held'; pid: number; h: number }
+  /** 别人的节日装扮变了（c = 编号，0 = 脱下） */
+  | { t: 'fz'; pid: number; c: number }
+  /** 自己的节日装扮：own = 已获得的编号，on = 戴着的；news = 刚获得的（用来弹提示）；gift = 刚领到的节日礼物 */
+  | { t: 'fz_state'; own: number[]; on: number; news?: number[]; gift?: { id: string; n: number }[] }
   /** 全部成就解锁记录（成就 id → 解锁时间）；new = 这次刚解锁的（客户端据此弹提示） */
   | { t: 'ach'; unlocked: Record<string, number>; new?: string[] }
   /** 今天的任务进度；full = 累计做完全部任务的天数；fresh = 这次刚完成的任务（客户端据此弹提示） */
@@ -437,11 +496,11 @@ export type ServerMsg =
   /** 我的称号：已获得（称号 id → 时间）与正在佩戴的；new = 这次刚得到的（客户端据此弹提示） */
   | { t: 'titles'; own: Record<string, number>; sel: string; new?: string[] }
   /** 我的精灵：出战队伍、精灵背包、图鉴、是否领过初始精灵；starters = 可选的初始精灵（只在没领过时有用） */
-  | { t: 'mon_data'; sq: Mon[]; bx: Mon[]; dex: Record<string, DexEntry>; starter: boolean; starters: string[]; /** 已经收服过的校园猫编号 */ tamed: number[] }
+  | { t: 'mon_data'; sq: Mon[]; bx: Mon[]; dex: Record<string, DexEntry>; starter: boolean; starters: string[]; /** 已经收服过的校园猫编号 */ tamed: number[]; /** 服务端算好的可学技能（精灵 id → 技能 id，按等级排序）；没有就不显示更换入口 */ learnable?: Record<string, string[]> }
   | { t: 'mon_result'; ok: boolean; msg: string }
   | { t: 'tp_result'; ok: boolean; msg: string }
   /** 我的宿舍：楼栋（没绑定 = 没有）、今天还能不能改楼栋、空调、宝箱；options = 能选的楼栋（按社区分组） */
-  | { t: 'dorm_data'; /** 门牌（房主起的名字，没起过就没有） */ title?: string; b?: string; canChange: boolean; ac: number; ch: Record<string, number>; options: { group: string; names: string[] }[] }
+  | { t: 'dorm_data'; /** 门牌（房主起的名字，没起过就没有） */ title?: string; b?: string; canChange: boolean; ac: number; ch: Record<string, number>; /** 浴缸里养的鱼（只有房主收到） */ bt?: Record<string, number>; /** 浴缸概览（闪光用） */ bv?: BathView; /** 家具摆放（装修过才有；没有 = 默认布局） */ lay?: Placed[]; /** 1 = 不在资料卡上展示 */ hid?: boolean; /** 房间级别（1 中屋 / 2 大屋，没有 = 小屋）、墙纸地板（w、f 正在用的样式；ow、of 已拥有的样式，按位记） */ rm?: 1 | 2; sk?: { w?: number; f?: number; ow?: number; of?: number }; /** 我的宿舍收到的赞数 */ likes?: number; /** 养在宿舍的小猫编号 */ dc?: number[]; /** true = 刚做过一键还原、还能撤回 */ ru?: boolean; options: { group: string; names: string[] }[] }
   /** 可以进屋了（x、y = 我在宿舍楼门口的位置，像素）/ 宿舍操作的结果 */
   | { t: 'dorm_in'; x: number; y: number }
   /** 服务器把人从宿舍里带走了（传送、队友传送、被管理员传走…）：客户端要离开室内、留在新位置 */
@@ -449,17 +508,17 @@ export type ServerMsg =
   /** 有人邀请我去 TA 的宿舍（kind = invite），或有人想来我的宿舍（kind = knock）；30 秒内回应 */
   | { t: 'dorm_ask'; uid: number; name: string; kind: 'invite' | 'knock'; title?: string }
   /** 我进了好友的宿舍：房主、门牌（房主起的名字，可能为空）、空调、房主是不是在睡觉、屋里已经有的人 */
-  | { t: 'dorm_visit'; host: number; hostName: string; title: string; ac: number; sleeping: boolean; roster: RoomWho[] }
+  | { t: 'dorm_visit'; host: number; hostName: string; title: string; ac: number; sleeping: boolean; bv?: BathView; lay?: Placed[]; rm?: 1 | 2; sk?: { w?: number; f?: number }; /** 这间宿舍的赞数、我有没有赞过 */ likes?: number; liked?: boolean; /** 房主养在宿舍的小猫编号（访客只能看） */ dc?: number[]; roster: RoomWho[] }
   /** 屋里有人进来 / 出去 / 动了；屋里的状态变了（空调、门牌、房主睡觉） */
   | { t: 'room_join'; w: RoomWho }
   | { t: 'room_leave'; id: number }
   | { t: 'room_pos'; id: number; x: number; y: number; flags: number }
-  | { t: 'room_state'; ac: number; title: string; sleeping: boolean }
+  | { t: 'room_state'; ac: number; title: string; sleeping: boolean; bv?: BathView; sk?: { w?: number; f?: number } }
   | { t: 'dorm_result'; ok: boolean; msg: string; /** 睡太久，服务器让你起床了 */ wake?: boolean }
   /** 手拉手：有人想牵我的手 / 全部牵着手的一对（玩家编号，l = 牵手的人，f = 被牵的人；画连线用）/ 我自己的状态（role = 我是牵的人/被牵的人/没有；pid、name = 对方）/ 操作结果 */
   | { t: 'hand_invite'; uid: number; name: string }
   | { t: 'hand_pairs'; list: { l: number; f: number }[] }
-  | { t: 'hand_me'; role: 'lead' | 'follow' | 'none'; pid: number; name: string; msg?: string }
+  | { t: 'hand_me'; role: 'lead' | 'follow' | 'none'; pid: number; name: string; /** 被牵的人站在队头的哪一侧（+1 / −1） */ side?: 1 | -1; msg?: string }
   | { t: 'hand_result'; ok: boolean; msg: string }
   /** 草丛里有动静：遇到了哪只（ms 之内不答复算走开）/ 提示已失效 */
   | { t: 'mon_enc'; sp: string; lv: number; sh?: 1; zone: string; ms: number }

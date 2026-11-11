@@ -2,11 +2,13 @@ import { cleanChatText, type ChatMessage } from '@/shared/chat';
 import { DEFAULT_CHANNEL_STATES, OFFLINE_CHANNEL_STATES, type ChannelId, type ChannelState } from '@/shared/channels';
 import { hueOf, type Profile } from '@/shared/profile';
 import type { BoardItem } from '@/shared/board';
-import type { WallComment, WallPost } from '@/shared/wall';
+import type { WallComment, WallPost, WallSort } from '@/shared/wall';
+import type { PlaceComment, PlacePost } from '@/shared/place';
 import type { Notice } from '@/shared/notice';
 import type { ChatHistoryItem, DmMsg, FriendInfo, PersonInfo } from '@/shared/social';
 import type { Gain, Inv } from '@/shared/items';
-import type { CatResult } from '@/shared/cats';
+import type { DormCard } from '@/shared/dorm';
+import type { CatInfo, CatResult } from '@/shared/cats';
 import type { AchEvent } from '@/shared/achievements';
 import type { QuestState } from '@/shared/quests';
 import type { FishLog } from '@/shared/fishing';
@@ -23,8 +25,10 @@ import type { ChatStatus, ChatTransport } from './chat';
 
 export interface NetHandlers {
   welcome?: (id: number, x: number, y: number) => void;
-  spawn?: (id: number, uid: number, x: number, y: number, flags: number, p: PublicProfile, ttl?: string, held?: number) => void;
+  spawn?: (id: number, uid: number, x: number, y: number, flags: number, p: PublicProfile, ttl?: string, held?: number, fz?: number, pose?: number) => void;
   held?: (pid: number, h: number) => void;
+  fz?: (pid: number, c: number) => void;
+  fzState?: (own: number[], on: number, news?: number[], gift?: { id: string; n: number }[]) => void;
   despawn?: (id: number) => void;
   snapshot?: (entries: SnapEntry[], now: number) => void;
   correct?: (x: number, y: number) => void;
@@ -34,6 +38,7 @@ export interface NetHandlers {
   board?: (items: BoardItem[]) => void;
   boardNew?: (item: BoardItem) => void;
   boardResult?: (ok: boolean, msg: string) => void;
+  aboutThanks?: (thanks: string[] | null) => void;
   /** 留言被管理员删除（全员收到） */
   boardDel?: (ids: number[]) => void;
   /** 公告列表（新的在前）；newId = 刚发布的那条（只在发布时有） */
@@ -67,7 +72,8 @@ export interface NetHandlers {
   dmHistory?: (withUid: number, items: DmMsg[], more: boolean) => void;
   socialResult?: (ok: boolean, msg: string) => void;
   socialNote?: (text: string) => void;
-  whois?: (uid: number, info: PersonInfo | null, relation: 'none' | 'self' | 'friend' | 'sent' | 'incoming' | 'blocked') => void;
+  whois?: (uid: number, info: PersonInfo | null, relation: 'none' | 'self' | 'friend' | 'sent' | 'incoming' | 'blocked', dorm?: DormCard) => void;
+  dormLikes?: (uid: number, n: number, liked: boolean, msg?: string) => void;
   /** 进入时收到的公屏最近记录 */
   chatHistory?: (items: ChatHistoryItem[]) => void;
   /** 背包（整份）；gain = 这次新得到的东西 */
@@ -79,7 +85,7 @@ export interface NetHandlers {
   /** 手拉手：有人想牵我的手 / 全部牵着手的一对（玩家编号）/ 我自己的状态 / 操作结果 */
   handInvite?: (uid: number, name: string) => void;
   handPairs?: (list: { l: number; f: number }[]) => void;
-  handMe?: (role: 'lead' | 'follow' | 'none', pid: number, name: string, msg?: string) => void;
+  handMe?: (role: 'lead' | 'follow' | 'none', pid: number, name: string, msg?: string, side?: 1 | -1) => void;
   handResult?: (ok: boolean, msg: string) => void;
   /** 定点传送的结果 */
   tpResult?: (ok: boolean, msg: string) => void;
@@ -101,7 +107,7 @@ export interface NetHandlers {
   monEncEnd?: () => void;
   monBt?: (m: Extract<ServerMsg, { t: 'mon_bt' }>) => void;
   /** 各只小猫对我的好感度（猫编号 → 点数） */
-  cats?: (aff: Record<string, number>, beds?: number[]) => void;
+  cats?: (aff: Record<string, number>, beds?: number[], info?: Record<string, CatInfo>, gifts?: { today: number; total: number }) => void;
   /** 校园币余额（gain = 这次刚得到的数量）；商店买卖结果 */
   coins?: (n: number, gain?: number) => void;
   shopResult?: (ok: boolean, msg: string) => void;
@@ -124,12 +130,21 @@ export interface NetHandlers {
   tradeState?: (m: Extract<ServerMsg, { t: 'trade_state' }>) => void;
   tradeEnd?: (tid: number, ok: boolean, msg: string) => void;
   tradeNote?: (msg: string) => void;
+  /** 喂水禽的结果 */
+  birdResult?: (m: Extract<ServerMsg, { t: 'bird_result' }>) => void;
   /** 校园墙：一页帖子（append = 接在后面）/ 一条帖子和它的评论 / 操作结果 */
-  wallPosts?: (items: WallPost[], more: boolean, append: boolean, pending?: number) => void;
+  wallPosts?: (items: WallPost[], more: boolean, append: boolean, pending?: number, meta?: { sort?: WallSort; tab?: 'pub' | 'pending'; next?: number; at?: number }) => void;
   wallPending?: (n: number) => void;
   wallThread?: (post: WallPost, comments: WallComment[]) => void;
   wallResult?: (ok: boolean, msg: string) => void;
-  catResult?: (id: number, kind: 'pet' | 'feed', r: CatResult) => void;
+  /** 地点留言板：上传券 / 一页留言 / 一条留言和评论 / 操作结果 / 管理员总览 / 待审核数 */
+  placeUpTicket?: (key: string, ticket: string, url: string) => void;
+  placePosts?: (m: Extract<ServerMsg, { t: 'place_posts' }>) => void;
+  placeThread?: (post: PlacePost, comments: PlaceComment[]) => void;
+  placeResult?: (ok: boolean, msg: string) => void;
+  placeAdminList?: (m: Extract<ServerMsg, { t: 'place_admin_list' }>) => void;
+  placePending?: (n: number) => void;
+  catResult?: (id: number, kind: 'pet' | 'feed' | 'hug', r: CatResult) => void;
   /** 成就：全部解锁记录（成就 id → 时间）；fresh = 这次刚解锁的 */
   ach?: (unlocked: Record<string, number>, fresh?: string[]) => void;
   /** 服务器当前时间（毫秒）：用来校准游戏时钟 */
@@ -169,6 +184,8 @@ export interface NetHandlers {
   /** 坐下结果（成功时 x/y 是座位位置）/ 别人（含自己）做了表情 */
   sitResult?: (ok: boolean, msg?: string, x?: number, y?: number) => void;
   emote?: (pid: number, e: number) => void;
+  /** 持续型表情（躺下 / 坐地）结束了 */
+  emoteEnd?: (pid: number) => void;
   /** 我的称号：已获得 / 正在佩戴 / 这次刚得到的 */
   titles?: (own: Record<string, number>, sel: string, fresh?: string[]) => void;
   /** 上车结果：被拒绝（附近没有车）时场景要把人放下来 */
@@ -248,8 +265,10 @@ export class NetClient implements ChatTransport {
         this.handlers.welcome?.(m.id, m.x, m.y);
         { const t = readAdminToken(); if (t) this.ws?.send(JSON.stringify({ t: 'admin_resume', token: t })); } // 之前登录过管理员：自动恢复
         break;
-      case 'spawn': this.handlers.spawn?.(m.id, m.uid, m.x, m.y, m.flags, m.p, m.ttl, m.held); break;
+      case 'spawn': this.handlers.spawn?.(m.id, m.uid, m.x, m.y, m.flags, m.p, m.ttl, m.held, m.fz, m.pose); break;
       case 'held': this.handlers.held?.(m.pid, m.h); break;
+      case 'fz': this.handlers.fz?.(m.pid, m.c); break;
+      case 'fz_state': this.handlers.fzState?.(m.own, m.on, m.news, m.gift); break;
       case 'despawn': this.handlers.despawn?.(m.id); break;
       case 'correct': this.handlers.correct?.(m.x, m.y); break;
       case 'chat': this.emit({ id: ++this.seq, kind: 'chat', pid: m.pid, uid: m.uid, from: m.from, hue: m.hue, text: m.text, ts: m.ts, mid: m.mid, ...(m.ch ? { ch: m.ch } : {}) }); break;
@@ -290,10 +309,12 @@ export class NetClient implements ChatTransport {
       case 'dm_history': this.handlers.dmHistory?.(m.with, m.items, m.more); break;
       case 'social_result': this.handlers.socialResult?.(m.ok, m.msg); break;
       case 'social_note': this.handlers.socialNote?.(m.text); break;
-      case 'whois': this.handlers.whois?.(m.uid, m.info, m.relation); break;
+      case 'whois': this.handlers.whois?.(m.uid, m.info, m.relation, m.dorm); break;
+      case 'dorm_likes': this.handlers.dormLikes?.(m.uid, m.n, m.liked, m.msg); break;
       case 'chat_history': this.handlers.chatHistory?.(m.items); break;
       case 'notices': this.handlers.notices?.(m.items, m.newId);
         break;
+      case 'about_thanks': this.handlers.aboutThanks?.(m.thanks); break;
       case 'inv': this.handlers.inv?.(m.items, m.gain); break;
       case 'mon_data': this.handlers.mon?.(m); break;
       case 'mon_result': this.handlers.monResult?.(m.ok, m.msg); break;
@@ -310,12 +331,12 @@ export class NetClient implements ChatTransport {
       case 'dorm_result': this.handlers.dormResult?.(m.ok, m.msg, m.wake); break;
       case 'hand_invite': this.handlers.handInvite?.(m.uid, m.name); break;
       case 'hand_pairs': this.handlers.handPairs?.(m.list); break;
-      case 'hand_me': this.handlers.handMe?.(m.role, m.pid, m.name, m.msg); break;
+      case 'hand_me': this.handlers.handMe?.(m.role, m.pid, m.name, m.msg, m.side); break;
       case 'hand_result': this.handlers.handResult?.(m.ok, m.msg); break;
       case 'mon_enc': this.handlers.monEnc?.(m); break;
       case 'mon_enc_end': this.handlers.monEncEnd?.(); break;
       case 'mon_bt': this.handlers.monBt?.(m); break;
-      case 'cats': this.handlers.cats?.(m.aff, m.beds); break;
+      case 'cats': this.handlers.cats?.(m.aff, m.beds, m.info, m.gifts); break;
       case 'coins': this.handlers.coins?.(m.n, m.gain); break;
       case 'shop_result': this.handlers.shopResult?.(m.ok, m.msg); break;
       case 'bin_result': this.handlers.binResult?.(m); break;
@@ -334,10 +355,17 @@ export class NetClient implements ChatTransport {
       case 'trade_state': this.handlers.tradeState?.(m); break;
       case 'trade_end': this.handlers.tradeEnd?.(m.tid, m.ok, m.msg); break;
       case 'trade_note': this.handlers.tradeNote?.(m.msg); break;
-      case 'wall_posts': this.handlers.wallPosts?.(m.items, m.more, m.append === true, m.pending); break;
+      case 'bird_result': this.handlers.birdResult?.(m); break;
+      case 'wall_posts': this.handlers.wallPosts?.(m.items, m.more, m.append === true, m.pending, { sort: m.sort, tab: m.tab, next: m.next, at: m.at }); break;
       case 'wall_pending': this.handlers.wallPending?.(m.n); break;
       case 'wall_thread': this.handlers.wallThread?.(m.post, m.comments); break;
       case 'wall_result': this.handlers.wallResult?.(m.ok, m.msg); break;
+      case 'place_up_ticket': this.handlers.placeUpTicket?.(m.key, m.ticket, m.url); break;
+      case 'place_posts': this.handlers.placePosts?.(m); break;
+      case 'place_thread': this.handlers.placeThread?.(m.post, m.comments); break;
+      case 'place_result': this.handlers.placeResult?.(m.ok, m.msg); break;
+      case 'place_admin_list': this.handlers.placeAdminList?.(m); break;
+      case 'place_pending': this.handlers.placePending?.(m.n); break;
       case 'cat_result': this.handlers.catResult?.(m.id, m.kind, m.r); break;
       case 'ride_result': this.handlers.rideResult?.(m.ok, m.msg); break;
       case 'ach': this.handlers.ach?.(m.unlocked, m.new); break;
@@ -368,6 +396,7 @@ export class NetClient implements ChatTransport {
       case 'quests': this.handlers.quests?.(m.list, m.full, m.fresh); break;
       case 'sit_result': this.handlers.sitResult?.(m.ok, m.msg, m.x, m.y); break;
       case 'emote': this.handlers.emote?.(m.pid, m.e); break;
+      case 'emote_end': this.handlers.emoteEnd?.(m.pid); break;
     }
   }
 
@@ -377,6 +406,7 @@ export class NetClient implements ChatTransport {
   postBoard(cat: number, text: string) { if (this.status === 'online') this.ws?.send(JSON.stringify({ t: 'board_post', cat, text })); }
   /** 管理员状态变化（登录/恢复/退出）的监听，可以有多个 */
   onAdmin(cb: (ok: boolean, msg?: string) => void) { this.adminCbs.push(cb); }
+  aboutThanksSet(thanks: string[] | null) { if (this.status === 'online') this.ws?.send(JSON.stringify({ t: 'about_thanks_set', thanks })); }
   noticePublish(title: string, body: string) { if (this.status === 'online') this.ws?.send(JSON.stringify({ t: 'notice_publish', title, body })); }
   noticeEdit(id: number, title: string, body: string) { if (this.status === 'online') this.ws?.send(JSON.stringify({ t: 'notice_edit', id, title, body })); }
   noticeDel(id: number) { if (this.status === 'online') this.ws?.send(JSON.stringify({ t: 'notice_del', id })); }
@@ -389,7 +419,7 @@ export class NetClient implements ChatTransport {
   binSearch(bin: number) { this.tx({ t: 'bin_search', bin }); }
   hallGet() { this.tx({ t: 'hall_get' }); }
   equipSet(slot: 'rod' | 'bait' | 'tackle' | 'target', id: string) { this.tx({ t: 'equip_set', slot, id }); }
-  boxOpen(id: string) { this.tx({ t: 'box_open', id }); }
+  boxOpen(id: string, n = 1) { this.tx({ t: 'box_open', id, ...(n > 1 ? { n } : {}) }); }
   craft(recipe: string, param?: string) { this.tx({ t: 'craft', recipe, ...(param ? { param } : {}) }); }
   getGeardex() { this.tx({ t: 'geardex_get' }); }
   bundleClaim(id: string) { this.tx({ t: 'bundle_claim', id }); }
@@ -403,7 +433,7 @@ export class NetClient implements ChatTransport {
   tradeCancel(tid: number) { this.tx({ t: 'trade_cancel', tid }); }
   tradeOffer(tid: number, items: Gain[], coins: number) { this.tx({ t: 'trade_offer', tid, items, coins }); }
   tradeReady(tid: number, on: boolean) { this.tx({ t: 'trade_ready', tid, on }); }
-  wallList(before?: number, pending = false) { this.tx({ t: 'wall_list', ...(before ? { before } : {}), ...(pending ? { pending: true } : {}) }); }
+  wallList(before?: number, pending = false, opt: { sort?: WallSort; off?: number; at?: number } = {}) { this.tx({ t: 'wall_list', ...(before ? { before } : {}), ...(pending ? { pending: true } : {}), ...(opt.sort === 'hot' ? { sort: 'hot' as const } : {}), ...(opt.off ? { off: opt.off } : {}), ...(opt.at ? { at: opt.at } : {}) }); }
   wallReview(id: number, ok: boolean) { this.tx({ t: 'wall_review', id, ok }); }
   wallOpen(id: number) { this.tx({ t: 'wall_open', id }); }
   wallPost(text: string, anon: boolean) { this.tx({ t: 'wall_post', text, anon }); }
@@ -412,6 +442,17 @@ export class NetClient implements ChatTransport {
   wallDel(id: number, c?: number) { this.tx({ t: 'wall_del', id, ...(c ? { c } : {}) }); }
   wallReport(id: number, c?: number) { this.tx({ t: 'wall_report', id, ...(c ? { c } : {}) }); }
   wallDelBy(by: string) { this.tx({ t: 'wall_del_by', by }); }
+  placeUp(key: string) { this.tx({ t: 'place_up', key }); }
+  placeOpen(key: string, opt: { sort?: WallSort; before?: number; off?: number; at?: number } = {}) { this.tx({ t: 'place_open', key, ...(opt.sort === 'hot' ? { sort: 'hot' as const } : {}), ...(opt.before ? { before: opt.before } : {}), ...(opt.off ? { off: opt.off } : {}), ...(opt.at ? { at: opt.at } : {}) }); }
+  placeThread(id: number) { this.tx({ t: 'place_thread', id }); }
+  placePost(key: string, text: string, imgs?: string[]) { this.tx({ t: 'place_post', key, text, ...(imgs?.length ? { imgs } : {}) }); }
+  placeComment(id: number, text: string) { this.tx({ t: 'place_comment', id, text }); }
+  placeLike(id: number) { this.tx({ t: 'place_like', id }); }
+  placeDel(id: number, c?: number) { this.tx({ t: 'place_del', id, ...(c ? { c } : {}) }); }
+  placeReport(id: number, c?: number) { this.tx({ t: 'place_report', id, ...(c ? { c } : {}) }); }
+  placeAdmin(tab: 'all' | 'pending' | 'img', key?: string, before?: number) { this.tx({ t: 'place_admin', tab, ...(key ? { key } : {}), ...(before ? { before } : {}) }); }
+  placeReview(id: number, ok: boolean) { this.tx({ t: 'place_review', id, ok }); }
+  placeDelBy(id: number) { this.tx({ t: 'place_del_by', id }); }
   whois(uid: number) { this.tx({ t: 'whois', uid }); }
   friendReq(uid: number) { this.tx({ t: 'friend_req', uid }); }
   friendAccept(uid: number) { this.tx({ t: 'friend_accept', uid }); }
@@ -434,6 +475,7 @@ export class NetClient implements ChatTransport {
   monOrder(ids: string[]) { this.tx({ t: 'mon_order', ids }); }
   monNick(id: string, name: string) { this.tx({ t: 'mon_nick', id, name }); }
   monFree(id: string) { this.tx({ t: 'mon_free', id }); }
+  monReplace(id: string, move: string, drop: number) { this.tx({ t: 'mon_replace', id, move, drop }); }
   catTame(id: number) { this.tx({ t: 'cat_tame', id }); }
   catBattle(id: number) { this.tx({ t: 'cat_battle', id }); }
   tpGo(id: string) { this.tx({ t: 'tp_go', id }); }
@@ -442,6 +484,8 @@ export class NetClient implements ChatTransport {
   dormGo() { this.tx({ t: 'dorm_go' }); }
   dormEnter() { this.tx({ t: 'dorm_enter' }); }
   dormLeave() { this.tx({ t: 'dorm_leave' }); }
+  /** 把好感 ≥ 200 的小猫接回宿舍养（on）/ 送回校园 */
+  dormCat(id: number, on: boolean) { this.tx({ t: 'dorm_cat', id, on }); }
   dormAc() { this.tx({ t: 'dorm_ac' }); }
   dormSleep(on: boolean) { this.tx({ t: 'dorm_sleep', on }); }
   dormChest(op: 'put' | 'take', id: string, n: number) { this.tx({ t: 'dorm_chest', op, id, n }); }
@@ -459,13 +503,24 @@ export class NetClient implements ChatTransport {
   monGo(accept: boolean) { this.tx({ t: 'mon_go', accept }); }
   monAct(bid: string, turn: number, a: Extract<ClientMsg, { t: 'mon_act' }>['a']) { this.tx({ t: 'mon_act', bid, turn, a }); }
   catPet(id: number) { this.tx({ t: 'cat_pet', id }); }
+  birdFeed(id: number) { this.tx({ t: 'bird_feed', id }); }
   catFeed(id: number, item: string) { this.tx({ t: 'cat_feed', id, item }); }
+  catHug(id: number) { this.tx({ t: 'cat_hug', id }); }
   ride(on: boolean) { this.tx({ t: 'ride', on }); }
   getAch() { this.tx({ t: 'ach_get' }); }
   achEvent(ev: AchEvent, tz?: number) { this.tx({ t: 'ach_event', ev, ...(tz !== undefined ? { tz } : {}) }); }
   sit(on: boolean) { this.tx({ t: 'sit', on }); }
   emote(e: number) { this.tx({ t: 'emote', e }); }
   held(h: number) { this.tx({ t: 'held', h }); }
+  dormBath(op: 'put' | 'take', id: string, n: number) { this.tx({ t: 'dorm_bath', op, id, n }); }
+  /** 装修：place = 摆一件、move = 挪/转、pick = 收回 */
+  dormLike(uid: number) { this.tx({ t: 'dorm_like', uid }); }
+  dormPub(on: boolean) { this.tx({ t: 'dorm_pub', on }); }
+  dormSkin(kind: 'w' | 'f', i: number, op: 'buy' | 'use') { this.tx({ t: 'dorm_skin', kind, i, op }); }
+  dormExpand() { this.tx({ t: 'dorm_expand' }); }
+  dormLay(m: { op: 'place'; d: string; x: number; y: number; r?: number } | { op: 'move'; i: number; x: number; y: number; r?: number } | { op: 'pick'; i: number } | { op: 'dye'; i: number; c: number } | { op: 'reset' } | { op: 'undo' }) { this.tx({ t: 'dorm_lay', ...m }); }
+  fzGet() { this.tx({ t: 'fz_get' }); }
+  fzSet(c: number) { this.tx({ t: 'fz_set', c }); }
   /** 举报：kind = chat / dm / board / wall / user；ref 见 ReportDialog */
   report(kind: ReportKind, ref: number, reason: number, note?: string, cid?: number, ch?: ChannelId) { this.tx({ t: 'report', kind, ref, reason, ...(note ? { note } : {}), ...(cid ? { cid } : {}), ...(ch && ch !== 'world' ? { ch } : {}) }); }
   /** 管理员控制台操作（服务器会检查你是不是管理员） */

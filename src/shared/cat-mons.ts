@@ -1,5 +1,5 @@
 /**
- * 猫系精灵（客户端与服务器共用）：校园里 20 种毛色各自一条进化线（幼崽 → 成年 → 王者），
+ * 猫系精灵（客户端与服务器共用）：校园里 24 种毛色（含 4 种校猫专用毛色）各自一条进化线（幼崽 → 成年 → 王者），
  * 每条线有自己的属性、种族值体系和美术（tools/mons/cat-art.ts 按毛色程序化生成正面/背面 64×64）。
  * 技能是"老吴"系列（老吴咆哮、老吴撼地掌……）：每个属性 4 个——物理/特殊 × 普通/终极。
  * 全部由下面的表算出来，不需要逐个物种手写；物种 id = c<毛色两位><阶段 a/b/c>，如 c00a = 橘猫幼崽。
@@ -8,7 +8,7 @@ import { COAT_LABELS, COAT_RARITY } from './cats';
 import type { Base, Move, MoveCat, Species } from './mons';
 
 export const CAT_EVO_LV = [16, 32] as const;
-const STEM = ['橘', '黑', '白', '三花', '奶牛', '灰', '狸花', '橘白', '蓝白', '燕尾', '玳瑁', '银渐', '金渐', '银虎', '蓝', '奶油', '暹罗', '布偶', '异瞳', '胖橘'] as const;
+const STEM = ['橘', '黑', '白', '三花', '奶牛', '灰', '狸花', '橘白', '蓝白', '燕尾', '玳瑁', '银渐', '金渐', '银虎', '蓝', '奶油', '暹罗', '布偶', '异瞳', '胖橘', '胡椒', '芝士', '蒲公英', '领结'] as const;
 const SUFFIX = ['崽', '猫', '猫王'] as const;
 const TIER = ['a', 'b', 'c'] as const;
 
@@ -40,6 +40,10 @@ const LINE: { types: [string] | [string, string]; arche: Arche; blurb: string }[
   { types: ['妖精', '冰'], arche: 'tank', blurb: '布偶猫软得像一团云，倒下去能压扁一排对手。' },
   { types: ['超能力', '妖精'], arche: 'glass', blurb: '一蓝一黄的异色瞳，盯着你看时世界都慢了半拍。' },
   { types: ['一般'], arche: 'tank', blurb: '胖橘：能躺着绝不坐着，一顿能吃三顿的量。' },
+  { types: ['草'], arche: 'speed', blurb: '灰白狸花，背上的条纹像撒了一把黑胡椒，一阵风似的窜过草丛。' },
+  { types: ['一般', '妖精'], arche: 'tank', blurb: '白底橘斑，脸上像打翻了一勺芝士酱；吃饭的时候谁也别想靠近。' },
+  { types: ['妖精', '飞行'], arche: 'mage', blurb: '奶白长毛配深色的大尾巴，像一朵会走路的蒲公英，一阵风就飘起来。' },
+  { types: ['一般', '超能力'], arche: 'balanced', blurb: '白胸口像系着领结，青色的眼睛有点狡黠，谁路过都想跟它握个手。' },
 ];
 const RARITY_BONUS = { common: 0, uncommon: 15, rare: 30, epic: 40, legendary: 50, mythic: 60, junk: 0 } as const;
 const STAGE_BST = [300, 400, 500] as const;
@@ -114,18 +118,17 @@ export function catBattleLevel(catId: number, coat: number): number {
 /**
  * 「耄耋」：网络上"圆头耄耋"的梗——一只脾气很大的橘色流浪猫，生气时耳朵压平、脑袋看起来是圆的，
  * 动不动就哈气，弓起背来像一条龙。这里把它做成一只强力的、技能全面的一般系猫精灵（只借梗的形象，画面是我们自己画的）：
- * 10 个技能槽，开局 10 级就会全部技能——一般系的哈气、咆哮、冲撞，加上格斗/地面/火/水/电/冰的老吴系列，打什么对手都有招。
+ * 5 个技能槽：默认带哈气、圆头冲撞、一般系的两招和格斗；地面/火/水/电/冰的老吴技能可以随时在精灵面板换上来。
  */
 export const DM_MOVES: Move[] = [
   { id: 'dm:hiss', name: '耄耋哈气', type: '一般', cat: 'special', power: 70, acc: 100, pp: 20 },
   { id: 'dm:round', name: '圆头冲撞', type: '一般', cat: 'physical', power: 75, acc: 95, pp: 20 },
 ];
 export const DM_SPECIES: Species = {
-  id: DM_ID, no: 99, name: '耄耋', types: ['一般'], base: [78, 82, 72, 82, 72, 80], catch: 0.02, noShiny: true, coat: 0, moveSlots: 10,
+  id: DM_ID, no: 99, name: '耄耋', types: ['一般'], base: [78, 82, 72, 82, 72, 80], catch: 0.02, noShiny: true, coat: 0, moveSlots: 5,
   desc: '圆头耄耋：耳朵一压，脑袋就圆了；背一弓，像条龙；一开口就是哈——气。传说它的叫声听上去像“老吴”。',
   learnset: [
-    { lv: 1, id: catMoveId('一般', 'p50') }, { lv: 1, id: catMoveId('一般', 's50') }, { lv: 1, id: 'dm:hiss' }, { lv: 1, id: 'dm:round' },
-    { lv: 2, id: catMoveId('格斗', 'p50') }, { lv: 3, id: catMoveId('地面', 'p50') }, { lv: 4, id: catMoveId('火', 's50') }, { lv: 5, id: catMoveId('水', 's50') },
-    { lv: 6, id: catMoveId('电', 's50') }, { lv: 7, id: catMoveId('冰', 's50') },
+    { lv: 1, id: catMoveId('地面', 'p50') }, { lv: 1, id: catMoveId('火', 's50') }, { lv: 2, id: catMoveId('水', 's50') }, { lv: 2, id: catMoveId('电', 's50') }, { lv: 2, id: catMoveId('冰', 's50') },
+    { lv: 3, id: catMoveId('一般', 'p50') }, { lv: 4, id: catMoveId('一般', 's50') }, { lv: 5, id: 'dm:hiss' }, { lv: 6, id: 'dm:round' }, { lv: 7, id: catMoveId('格斗', 'p50') },
   ],
 };

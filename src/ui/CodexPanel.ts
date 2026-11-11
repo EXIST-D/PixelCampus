@@ -1,5 +1,9 @@
 import type Phaser from 'phaser';
 import type { NetClient } from '@/net/client';
+import type { ServerMsg } from '@/shared/protocol';
+import { CONTENT, ZONES, monArt } from '@/shared/mons-content';
+import { elementName } from '@/shared/mons';
+import { monDexGroups, monDexProgress, monDexRows, monDexZoneOptions, type MonDexFilter, type MonDexRow } from './mondexModel';
 import { REAL_FISH, RARITY_COLORS, RARITY_NAMES, RARITY_ORDER, MOVE_NAMES, diffStars, fishDef, fmtKg, habitat, habitatText, type FishDef, type FishLog } from '@/shared/fishing';
 import { fishPrice } from '@/shared/economy';
 import { boxDef } from '@/shared/boxes';
@@ -8,9 +12,11 @@ import { availableNow, bundleViews, fishGroups, fishHint, gearRows, levelRows, m
 import { ROUTES, ROUTE_NAMES, XP_OVER_RATE, XP_SOFT_CAP, barBonus, routeBonus, routeSlots, type Route } from '@/shared/fishlevel';
 import { itemDef, type Inv } from '@/shared/items';
 import { tierProgress } from '@/shared/fishdex';
-import { COAT_LABELS, COAT_RARITY, LEVEL_NAMES, catLevel, type CatDef } from '@/shared/cats';
+import { COAT_LABELS, COAT_RARITY, LEVEL_NAMES, REAL_CAT_FIRST, REAL_CAT_COUNT, catLevel, type CatDef, type CatInfo } from '@/shared/cats';
+import { GROUP_NAMES, catProfile, likesKnown, realCatOf, storiesUnlocked } from '@/shared/cat-lore';
 import { drawFrame, drawItem } from './sprites';
 import { ui } from './actions';
+import type { Host, Section } from './hosted';
 
 const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: string) => {
   const e = document.createElement(tag);
@@ -19,11 +25,16 @@ const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
   return e;
 };
 
-export type CodexTab = 'animals' | 'fish';
-interface TabDef { id: CodexTab; label: string; render: (box: HTMLElement) => void }
+export type CodexTab = 'animals' | 'fish' | 'mons' | 'ach' | 'titles';
+type MonData = Extract<ServerMsg, { t: 'mon_data' }>;
+const COLOR = new Map(CONTENT.elements.elements.map((e) => [e.id, e.color]));
+const GROUP_COLORS: Record<'open' | 'cat' | 'dm', string> = { open: '#6aa84f', cat: '#b8501e', dm: '#8a5ac4' };
+const typeBadge = (id: string) => { const b = el('span', 'mon-type', elementName(CONTENT.elements, id)); b.style.background = COLOR.get(id) ?? '#aaa'; return b; };
+const dexNo = (no: number) => `No.${String(no).padStart(3, '0')}`;
+interface TabDef { id: CodexTab; label: string; render: (box: HTMLElement) => void; /** 切到这一页时调用（取数据） */ enter?: () => void }
 
 /**
- * 图鉴：一个入口（电脑按 H / 菜单「图鉴」）下面分页——动物图鉴（校园小猫）、钓鱼图鉴。以后加新图鉴，在 tabs 里加一项即可。
+ * 图鉴：一个入口（电脑按 H / 菜单「图鉴」）下面分页——动物图鉴（校园小猫）、钓鱼图鉴，以及并进来的成就（J）、称号。以后加新页，在 tabs 里加一项（或 attach 一个寄宿页）即可。
  * 数据都是服务器给的（小猫好感度、钓鱼记录），这里只显示；没收集到的显示成灰色剪影和"？？？"。
  */
 export class CodexPanel {
@@ -37,12 +48,20 @@ export class CodexPanel {
   private fishView: 'all' | 'now' = 'all';
   private filter: FishFilter = {};
   private bundleMsg = '';
+  /** 精灵图鉴：筛选 / 选中的精灵（关闭图鉴时重置） */
+  private monFilter: MonDexFilter = {};
+  private monSel: string | null = null;
+  /** 精灵图鉴当前展开的筛选下拉：属性 / 区域 */
+  private monOpen: 'type' | 'zone' | null = null;
+  /** 本次渲染待摆位的下拉弹层（render 之后再测量按钮位置） */
+  private pendingDd: { kind: 'type' | 'zone'; options: { value: string; label: string; color?: string }[]; btn: HTMLElement } | null = null;
   private tabs: TabDef[] = [
     { id: 'animals', label: '动物图鉴', render: (b) => this.renderAnimals(b) },
     { id: 'fish', label: '钓鱼图鉴', render: (b) => this.renderFish(b) },
+    { id: 'mons', label: '精灵图鉴', render: (b) => this.renderMons(b), enter: () => this.net.monGet() },
   ];
 
-  constructor(private net: NetClient, private textures: Phaser.Textures.TextureManager, private deps: { cats: () => { defs: readonly CatDef[]; aff: Record<string, number>; nicks: Record<string, string> }; /** 背包、此刻正在用的竿和饵（神话鱼的条件要对照） */ inv: () => Inv; gear: () => { rod: string; bait: string } }) {
+  constructor(private net: NetClient, private textures: Phaser.Textures.TextureManager, private deps: { cats: () => { defs: readonly CatDef[]; aff: Record<string, number>; nicks: Record<string, string>; info?: Record<string, CatInfo> }; /** 背包、此刻正在用的竿和饵（神话鱼的条件要对照） */ inv: () => Inv; gear: () => { rod: string; bait: string }; /** 精灵图鉴：只读 MonPanel 的 mon_data */ mons: () => MonData | null }) {
     const panel = el('div', 'box codex');
     const head = el('div', 'board-head');
     const close = el('button', 'btn', '✕'); close.type = 'button'; close.setAttribute('aria-label', '关闭图鉴');
@@ -51,6 +70,13 @@ export class CodexPanel {
     panel.append(head, this.tabsBar, this.body);
     this.root.append(panel);
     this.root.addEventListener('mousedown', (e) => { if (e.target === this.root) this.close(); });
+    // 点在下拉面板之外：收起下拉（fixed 弹层不占布局，不会自己消失）
+    document.addEventListener('mousedown', (e) => {
+      if (!this.monOpen) return;
+      const t = e.target as Element | null;
+      if (t?.closest('.mon-dex-dd-menu') || t?.closest('.mon-dex-dd-btn')) return;
+      this.monOpen = null; this.render();
+    });
     window.addEventListener('keydown', (e) => { if (e.key === 'Escape' && this.isOpen) this.close(); });
     (document.getElementById('hud') ?? document.body).append(this.root);
     ui.add({ id: 'codex', label: '图鉴', key: 'H', run: () => this.toggle() });
@@ -61,25 +87,136 @@ export class CodexPanel {
   get isOpen() { return !this.root.classList.contains('hidden'); }
   /** 直接打开钓鱼图鉴的某个子页（背包里点等级那一行用） */
   openFishSub(sub: 'fish' | 'rods' | 'baits' | 'bundles' | 'level') { this.fishSub = sub; this.open('fish'); }
-  open(tab?: CodexTab) { if (tab) this.tab = tab; this.root.classList.remove('hidden'); this.net.getFishdex(); this.net.getGeardex(); this.net.getFx(); this.net.getInv(); this.render(); }
-  close() { this.root.classList.add('hidden'); }
+  open(tab?: CodexTab) { if (tab) this.tab = tab; this.root.classList.remove('hidden'); this.net.getFishdex(); this.net.getGeardex(); this.net.getFx(); this.net.getInv(); this.enter(); this.render(); }
+  /** 当前页的「进入」动作（成就 / 称号页取最新数据、清红点） */
+  private enter() { this.tabs.find((t) => t.id === this.tab)?.enter?.(); }
+  /** 并进来一页（成就、称号）：宿主接口给寄宿面板用，旧的 open / close / isOpen 照常工作 */
+  attach<T extends 'ach' | 'titles'>(id: T, label: string, section: Section & { attach(h: Host<T>): void }) {
+    this.tabs.push({ id, label, render: (b) => b.append(section.view), enter: () => section.enter() });
+    section.attach({ open: (t) => this.open(t), close: () => this.close(), isOpenOn: (t) => this.isOpen && this.tab === t });
+  }
+  close() { this.root.classList.add('hidden'); this.monFilter = {}; this.monSel = null; this.monOpen = null; }
   toggle() { this.isOpen ? this.close() : this.open(); }
   /** 数据变了（小猫好感度、钓鱼记录）就刷新 */
   refresh() { if (this.isOpen) this.render(); }
 
   private render() {
+    // 弹层挂在 .codex 上（不在 body 里），每次重建前先清掉，否则会越堆越多、选完也不消失
+    this.root.querySelectorAll('.mon-dex-dd-menu').forEach((m) => m.remove());
     this.tabsBar.replaceChildren(...this.tabs.map((t) => {
       const b = el('button', 'cx-tab' + (t.id === this.tab ? ' on' : ''), t.label); b.type = 'button';
-      b.addEventListener('click', () => { this.tab = t.id; this.render(); });
+      b.addEventListener('click', () => { this.tab = t.id; this.enter(); this.render(); });
       return b;
     }));
     this.body.replaceChildren();
     this.tabs.find((t) => t.id === this.tab)?.render(this.body);
+    this.flushDd();
   }
 
+  // ------------------------------------------------------------ 精灵图鉴
+  private renderMons(box: HTMLElement) {
+    const data = this.deps.mons();
+    if (!data) { box.append(el('div', 'cx-dim mon-dex-empty', '读取中…')); return; }
+    const all = monDexRows(CONTENT, data.dex, ZONES);
+    const p = monDexProgress(all);
+    box.append(el('div', 'cx-sum mon-dex-sum', `精灵图鉴　已见 ${p.seen} / ${p.total}　·　已收服 ${p.caught} / ${p.total}`));
+    const bar = el('div', 'cx-pbar big mon-dex-pbar'), fill = el('div', 'cx-pfill');
+    fill.style.width = `${p.total ? Math.round((p.seen / p.total) * 100) : 0}%`; bar.append(fill); box.append(bar);
+    const filterBar = el('div', 'cx-filter mon-dex-filter');
+    const caughtLabel = el('label', 'cx-chk'); const caught = el('input'); caught.type = 'checkbox'; caught.checked = !!this.monFilter.caughtOnly;
+    caught.addEventListener('change', () => { this.monFilter.caughtOnly = caught.checked || undefined; this.monOpen = null; this.render(); });
+    caughtLabel.append(caught, document.createTextNode('只看已收服'));
+    const typeName = this.monFilter.type ? elementName(CONTENT.elements, this.monFilter.type) : '全部';
+    const zoneName = this.monFilter.zone ? monDexZoneOptions(ZONES).find((z) => z.id === this.monFilter.zone)?.name ?? '全部' : '全部';
+    filterBar.append(
+      this.monDropdown('属性', typeName, 'type', [{ value: '', label: '全部属性' }, ...CONTENT.elements.elements.map((e) => ({ value: e.id, label: e.name, color: e.color }))]),
+      caughtLabel,
+      this.monDropdown('区域', zoneName, 'zone', [{ value: '', label: '全部区域' }, ...monDexZoneOptions(ZONES).map((z) => ({ value: z.id, label: z.name }))]),
+    );
+    box.append(filterBar);
+    const groups = monDexGroups(CONTENT, data.dex, ZONES, this.monFilter).filter((g) => g.rows.length);
+    if (!groups.length) box.append(el('div', 'cx-dim mon-dex-empty', '没有符合条件的精灵'));
+    for (const g of groups) {
+      const title = el('div', 'cx-group mon-dex-group', `${g.title}　见过 ${g.seen} / ${g.total} · 收服 ${g.caught} / ${g.total}`);
+      title.style.borderLeftColor = GROUP_COLORS[g.id];
+      const grid = el('div', 'cx-grid mon-dex-grid');
+      for (const row of g.rows) {
+        const cell = el('button', 'cx-cell mon-dex-cell' + (row.seen ? ' got' : '') + (this.monSel === row.sp.id ? ' on' : '')); cell.type = 'button';
+        const im = el('img', 'mon-img mon-dex-img' + (row.seen ? '' : ' silhouette'));
+        im.src = row.art ?? monArt(row.sp.id, 'front'); im.alt = ''; im.draggable = false;
+        cell.append(im, el('div', 'cx-name', row.seen ? row.name : '？？？'), el('div', 'cx-sub', row.seen ? `${dexNo(row.no)} · ${row.caught ? `收服 ×${row.caught}` : `见过 ×${row.seenCount}`}` : dexNo(row.no)));
+        cell.addEventListener('click', () => { this.monSel = row.sp.id; this.render(); });
+        grid.append(cell);
+      }
+      box.append(title, grid);
+    }
+    box.append(this.renderMonDetail(all));
+  }
+  /** 精灵图鉴的像素风下拉（不用浏览器原生 select 弹层）；弹出层挂到面板根节点，避免被滚动容器裁切 */
+  private monDropdown(label: string, value: string, kind: 'type' | 'zone', options: { value: string; label: string; color?: string }[]): HTMLElement {
+    const wrap = el('div', 'mon-dex-dd');
+    const btn = el('button', 'cx-sub-tab mon-dex-dd-btn' + (this.monOpen === kind ? ' on' : '')); btn.type = 'button'; btn.textContent = `${label}：${value}`;
+    btn.addEventListener('click', () => { this.monOpen = this.monOpen === kind ? null : kind; this.render(); });
+    wrap.append(btn);
+    if (this.monOpen === kind) { wrap.classList.add('open'); this.pendingDd = { kind, options, btn }; }
+    return wrap;
+  }
+  /** 渲染完成后（按钮已经在文档里、能量到矩形）再摆弹层 */
+  private flushDd() {
+    const p = this.pendingDd; this.pendingDd = null;
+    if (!p) return;
+    this.openDd(p.kind, p.options, p.btn);
+  }
+  /** 把下拉面板放到 .codex 里、贴着按钮下方；按空间自动向左/向上收，避免超出面板 */
+  private openDd(kind: 'type' | 'zone', options: { value: string; label: string; color?: string }[], btn: HTMLElement) {
+    const panel = this.root.querySelector('.codex') as HTMLElement | null;
+    if (!panel) return;
+    const menu = el('div', 'mon-dex-dd-menu' + (kind === 'zone' ? ' zone' : ''));
+    for (const o of options) {
+      const b = el('button', 'mon-dex-dd-opt' + (!o.value ? ' all' : '')); b.type = 'button';
+      if (o.color) { const s = el('span', 'mon-type', o.label); s.style.background = o.color; b.append(s); }
+      else b.append(document.createTextNode(o.value ? o.label : (kind === 'type' ? '全部' : '全部区域')));
+      b.addEventListener('click', () => {
+        this.monOpen = null;
+        if (kind === 'type') this.monFilter.type = o.value || undefined; else this.monFilter.zone = o.value || undefined;
+        this.render();
+      });
+      menu.append(b);
+    }
+    panel.append(menu);
+    const pr = panel.getBoundingClientRect(), br = btn.getBoundingClientRect();
+    // 弹层 absolute 挂在 .codex 上，用相对面板的坐标；先量宽度再摆，避免抖动
+    menu.style.left = '0px'; menu.style.top = '0px';
+    const mw = menu.offsetWidth, mh = menu.offsetHeight;
+    const relLeft = br.left - pr.left, relBottom = pr.bottom - br.bottom;
+    const left = Math.min(Math.max(4, relLeft), Math.max(4, pr.width - mw - 4));
+    const top = relBottom >= mh + 6 ? br.bottom - pr.top + 4 : Math.max(4, br.top - pr.top - mh - 4);
+    menu.style.left = `${Math.round(left)}px`;
+    menu.style.top = `${Math.round(top)}px`;
+  }
+
+  private renderMonDetail(rows: MonDexRow[]): HTMLElement {
+    const d = el('div', 'cx-detail mon-dex-detail');
+    const row = this.monSel ? rows.find((r) => r.sp.id === this.monSel) : undefined;
+    if (!row) { d.append(el('div', 'cx-dim', '点一只精灵看详情。')); return d; }
+    if (!row.seen) {
+      const im = el('img', 'mon-img mon-dex-img big silhouette'); im.src = monArt(row.sp.id, 'front'); im.alt = '';
+      d.append(im, el('div', 'cx-dname', '？？？'), el('div', 'cx-dline', dexNo(row.no)), el('div', 'cx-dim', '还没遇到'));
+      return d;
+    }
+    const top = el('div', 'cx-d-top'); top.append(el('span', 'cx-d-name', row.name), el('span', 'board-tag', dexNo(row.no)));
+    const types = el('div', 'mon-types'); types.append(...row.types.map(typeBadge));
+    d.append(top, types, el('div', 'cx-d-desc', row.desc));
+    if (row.chain.length) d.append(el('div', 'cx-d-line mon-dex-chain', `进化链：${row.chain.map((c) => `${c.name}${c.lv !== undefined ? `（Lv.${c.lv}）` : ''}`).join(' → ')}`));
+    d.append(el('div', 'cx-d-line', `栖息地：${row.habitat}`), el('div', 'cx-d-line', `我的记录：见过 ${row.seenCount} 次　·　收服 ${row.caught} 次`));
+    return d;
+  }
+
+
   // ------------------------------------------------------------ 动物图鉴
+  private catSel = -1;
   private renderAnimals(box: HTMLElement) {
-    const { defs, aff, nicks } = this.deps.cats();
+    const { defs, aff, nicks, info } = this.deps.cats();
     const known = (d: CatDef) => (aff[d.id] ?? 0) > 0, met = defs.filter(known).length;
     // 毛色收集：某个毛色只要认识了一只这种毛色的猫，就算收集到
     const total = new Map<number, number>(), got = new Map<number, number>();
@@ -105,17 +242,43 @@ export class CodexPanel {
       }
       box.append(t, grid);
     }
-    // 每一只小猫
-    box.append(el('div', 'cx-group cx-cats', '每一只小猫'));
-    const grid = el('div', 'cx-grid');
-    for (const d of defs) {
-      const a2 = aff[d.id] ?? 0, has = a2 > 0, lv = catLevel(a2), cell = el('div', 'cx-cell' + (has ? ' got' : ''));
+    // 每一只小猫：校猫（真的住在新校区的）单独成组放最前面，按所在楼分小标题；点一只看档案
+    const detail = el('div', 'cx-catdetail hidden'), cellOf = new Map<number, HTMLElement>();
+    const showDetail = (d: CatDef) => {
+      const a2 = aff[d.id] ?? 0, lv = catLevel(a2), p = catProfile(d), fv = !!info?.[d.id]?.fv;
+      this.catSel = d.id; detail.classList.remove('hidden'); detail.replaceChildren();
+      for (const [id, c2] of cellOf) c2.classList.toggle('sel', id === d.id);
+      if (a2 <= 0) { detail.append(el('div', 'cx-dname', '？？？'), el('div', 'create-sub', `还没认识它。去${p.real ? p.place : '校园里'}找找看，摸一摸、喂一喂就能认识。`)); return; }
+      const name = el('div', 'cx-dname', `${nicks[d.id] ? `${nicks[d.id]}（${d.name}）` : d.name} · ${p.coatLabel} · ${LEVEL_NAMES[lv]}`);
+      detail.append(name);
+      if (p.real) detail.append(el('div', 'cx-dreal', '🏫 校猫 · 真的住在新校区'));
+      detail.append(el('div', 'cx-drow', `出没：${p.place}`), el('div', 'cx-drow', `样子：${p.look}`), el('div', 'cx-drow', `性格：${p.trait}`),
+        el('div', 'cx-drow', `爱吃：${likesKnown(lv, fv) ? p.likes.map((i) => itemDef(i)?.name ?? i).join('、') : '还不熟，它不肯告诉你'}`));
+      const n = storiesUnlocked(lv);
+      p.stories.forEach((st, i) => detail.append(el('div', 'cx-dstory' + (i < n ? '' : ' locked'), i < n ? `📖 ${st}` : `🔒 好感到「${LEVEL_NAMES[i + 1]}」解锁`)));
+    };
+    const cell = (d: CatDef) => {
+      const a2 = aff[d.id] ?? 0, has = a2 > 0, lv = catLevel(a2), cl = el('div', 'cx-cell cx-click' + (has ? ' got' : ''));
       const c = el('canvas'); try { drawFrame(c, this.textures, 'cats', `cat${d.coat}_sit_0`, 3); } catch { /* 图集没加载 */ }
-      const rar = COAT_RARITY[d.coat] ?? 'common'; if (has) cell.style.borderColor = RARITY_COLORS[rar];
-      cell.append(c, el('div', 'cx-name', has ? d.name : '？？？'), el('div', 'cx-sub', has ? `${COAT_LABELS[d.coat] ?? ''} · ${LEVEL_NAMES[lv]}${nicks[d.id] ? ` · 你叫它「${nicks[d.id]}」` : ''}` : '还没认识'));
-      grid.append(cell);
+      const rar = COAT_RARITY[d.coat] ?? 'common'; if (has) cl.style.borderColor = RARITY_COLORS[rar];
+      cl.append(c, el('div', 'cx-name', has ? d.name : '？？？'), el('div', 'cx-sub', has ? `${COAT_LABELS[d.coat] ?? ''} · ${LEVEL_NAMES[lv]}${nicks[d.id] ? ` · 你叫它「${nicks[d.id]}」` : ''}` : '还没认识'));
+      cl.addEventListener('click', () => showDetail(d)); cellOf.set(d.id, cl);
+      return cl;
+    };
+    const real = defs.filter((d) => d.id >= REAL_CAT_FIRST && d.id < REAL_CAT_FIRST + REAL_CAT_COUNT), others = defs.filter((d) => !real.includes(d));
+    if (real.length) {
+      const got = real.filter(known).length;
+      box.append(el('div', 'cx-group cx-cats', `校猫 · 真的住在新校区（已认识 ${got} / ${real.length}）`), el('div', 'create-sub', '它们是新校区里真实存在的小猫，在游戏里有了像素分身，名字是我们起的。去它们常出没的楼下找找看。'));
+      const order: string[] = []; for (const d of real) { const g = realCatOf(d.id)!.group; if (!order.includes(g)) order.push(g); }
+      for (const g of order) {
+        box.append(el('div', 'cx-subgroup', GROUP_NAMES[g as keyof typeof GROUP_NAMES]));
+        const gr = el('div', 'cx-grid'); for (const d of real.filter((x) => realCatOf(x.id)!.group === g)) gr.append(cell(d)); box.append(gr);
+      }
     }
-    box.append(grid);
+    box.append(el('div', 'cx-group cx-cats', real.length ? '校园里的其他小猫' : '每一只小猫'));
+    const grid = el('div', 'cx-grid'); for (const d of others) grid.append(cell(d)); box.append(grid);
+    box.append(detail);
+    const sel = defs.find((d) => d.id === this.catSel); if (sel) showDetail(sel);
   }
 
   // ------------------------------------------------------------ 钓鱼图鉴

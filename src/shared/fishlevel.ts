@@ -41,9 +41,9 @@ export function catchXp(def: FishDef, o: { perfect?: boolean; isNew?: boolean; n
  * 软上限：todayRaw = 今天已经算过的（未打折的）基础经验，gain = 这次要加的；返回实际给多少和新的 todayRaw。
  * 超出的部分按累计取整（floor(超出总量 × 0.4) 的差），所以零头会累积，不会"常见鱼超过上限就永远 0"。
  */
-export function applySoftCap(todayRaw: number, gain: number): { granted: number; raw: number } {
+export function applySoftCap(todayRaw: number, gain: number, cap = XP_SOFT_CAP): { granted: number; raw: number } {
   const t = Math.max(0, Math.floor(todayRaw)), g = Math.max(0, Math.floor(gain)), after = t + g;
-  const overBefore = Math.max(0, t - XP_SOFT_CAP), overAfter = Math.max(0, after - XP_SOFT_CAP);
+  const overBefore = Math.max(0, t - cap), overAfter = Math.max(0, after - cap);
   const full = g - (overAfter - overBefore);
   return { granted: full + (Math.floor(overAfter * XP_OVER_RATE) - Math.floor(overBefore * XP_OVER_RATE)), raw: after };
 }
@@ -71,7 +71,7 @@ export function routeBonus(rt: readonly Route[], lv: number): { sell: number; tr
 }
 
 // ------------------------------------------------------------ 配方等级门槛
-export const RECIPE_LEVEL: Record<string, number> = { junk_bait: 1, small_bait: 2, named_bait: 5, pro_bait: 7, myth_bait: 10, bone_rod: 12, glow_bait: 13 };
+export const RECIPE_LEVEL: Record<string, number> = { junk_bait: 1, small_bait: 2, named_bait: 5, pro_bait: 7, myth_bait: 10, bone_rod: 12, glow_bait: 13, crate_up: 3, wreck_up: 6 };
 
 // ------------------------------------------------------------ 档案
 /** 档案里的钓鱼等级数据：xp 总经验、rt 两个路线槽、rel 放生次数、wk 周委托全勤周数、xd 今天已算过的基础经验（软上限用） */
