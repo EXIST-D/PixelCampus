@@ -81,10 +81,38 @@ export interface Species {
   coat?: number; stage?: 1 | 2 | 3;
 }
 
+// ------------------------------------------------------------------ 状态异常
+/** 本场战斗的异常状态（只活在 Battle 里，不进存档） */
+export type StatusKind = 'poison' | 'burn' | 'paralysis' | 'sleep' | 'freeze';
+export const STATUS_NAMES: Record<StatusKind, string> = { poison: '中毒', burn: '灼伤', paralysis: '麻痹', sleep: '睡眠', freeze: '冰冻' };
+export interface StatusState { k: StatusKind; /** 睡眠剩余回合（回合结束 −1） */ n?: number }
+/** 招式附加状态的概率（百分比，0–100） */
+export interface MoveStatus { s: StatusKind; chance: number }
+
 export type MoveCat = 'physical' | 'special';
 /** 招式附带的能力变化：d 为正升、为负降；chance 是触发概率（百分比，没写 = 100） */
 export interface MoveStat { k: StageKey; d: number; target: 'self' | 'foe'; chance?: number }
-export interface Move { id: string; name: string; type: string; cat: MoveCat; power: number; acc: number; pp: number; priority?: number; /** 命中后附带的能力变化（本批只有伤害招式带） */ stat?: MoveStat }
+export interface Move {
+  id: string; name: string; type: string; cat: MoveCat; power: number; acc: number; pp: number; priority?: number;
+  /** 命中后附带的能力变化（本批只有伤害招式带） */ stat?: MoveStat;
+  /** 命中后附带状态异常的概率 */ status?: MoveStatus;
+  /** 回复：ratio = 最大生命的比例；selfSleep = 回满后自睡几回合（睡觉招） */
+  heal?: { ratio: number; selfSleep?: number };
+  /** 保护：本回合免伤（连续使用衰减） */
+  guard?: true;
+  /** 吸取：按造成伤害的比例回血 */
+  drain?: number;
+  /** 反伤：自身受到造成伤害的这个比例（0–1） */
+  recoil?: number;
+  /** 界面上的一句话效果说明（没写就按上面的字段自动生成） */
+  desc?: string;
+}
+
+/** 命中率：基础命中 × 命中/闪避倍率，夹在 5%–100%；必中招式（acc >= 100）不受影响 */
+export function hitRate(acc: number, stageDiff: number): number {
+  if (acc >= 100) return 100;
+  return Math.max(5, Math.min(100, acc * accuracyMul(stageDiff)));
+}
 
 export interface MonMove { id: string; pp: number }
 /** 一只精灵（存档里的样子）。id 是实例编号，不是物种号；iv 顺序同 STAT_KEYS */
@@ -163,9 +191,9 @@ export function xpGain(sp: Species, enemyLv: number, share = 1): number {
  * 捕捉成功率：满血时就是物种的捕捉概率，血越少越高（最多 ×3），再乘道具倍率，夹在 [CATCH_FLOOR, CATCH_CEIL]。
  * 服务器掷一次骰子；道具无论成败都消耗。
  */
-export function catchChance(sp: Species, hp: number, maxHp: number, ballMul = 1): number {
+export function catchChance(sp: Species, hp: number, maxHp: number, ballMul = 1, statusMul = 1): number {
   const ratio = maxHp > 0 ? Math.max(0, Math.min(1, hp / maxHp)) : 1;
-  return Math.max(MON.CATCH_FLOOR, Math.min(MON.CATCH_CEIL, sp.catch * (3 - 2 * ratio) * ballMul));
+  return Math.max(MON.CATCH_FLOOR, Math.min(MON.CATCH_CEIL, sp.catch * (3 - 2 * ratio) * ballMul * statusMul));
 }
 
 // ------------------------------------------------------------------ 技能

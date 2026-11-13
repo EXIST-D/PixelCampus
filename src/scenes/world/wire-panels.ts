@@ -164,7 +164,12 @@ export function wireWorld(sc: WorldScene) {
       };
     })(),
   });
-  sc.tpUi = new TeleportPanel(sc.net, (floor, id, viaTree) => { if (viaTree) sc.hud.banner('🌳 大树洞', '钻过去了……'); else sc.hud.banner('📍 传送', '到啦'); sfx('go'); if (floor) enterFloor(sc, floor); if (id === 'farm') (viaTree ? enterFarmTree : enterFarm)(sc); }); // 选了某一层：到门口后直接进那一层；传到农场：进入私人农场空间（从大树洞钻的用树洞版：慢暗 → 黑一拍 → 暖光亮起）
+  sc.tpUi = new TeleportPanel(sc.net, (floor, id, viaTree) => {
+    if (viaTree) sc.hud.banner('🌳 大树洞', '钻过去了……'); else sc.hud.banner('📍 传送', '到啦'); sfx('go');
+    if (id === 'farm') { (viaTree ? enterFarmTree : enterFarm)(sc); return; } // 传到农场：进入私人农场空间（从大树洞钻的用树洞版：慢暗 → 黑一拍 → 暖光亮起）
+    const it = sc.scene.isActive('Interior') ? (sc.scene.get('Interior') as unknown as { teleportOut?: (f?: string) => void }) : null; // 在室内（宿舍/教室）里点传送：先退出室内再进楼层
+    if (it?.teleportOut) it.teleportOut(floor); else if (floor) enterFloor(sc, floor);
+  }); // 选了某一层：到门口后直接进那一层
   sc.worldUi = new WorldPanel(sc.net, { friends: () => sc.socialUi.friendList, locOf: (u) => sc.socialUi.locOf(u) });
   sc.socialUi.onWorld = (uid) => sc.worldUi.openFor(uid); sc.socialUi.onLocs = () => sc.worldUi.refresh();
   sc.worldUi.onChange = (kind) => { // 换了世界：旧世界里的人物、公屏都不是这个世界的了（服务器会补发这个世界的单车/小猫/牵手/公屏记录）

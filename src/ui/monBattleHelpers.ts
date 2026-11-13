@@ -3,7 +3,7 @@
  * 真正的结算在服务器；这里只把数据变成文字和显示用的字段。
  */
 import type { BEvent } from '@/shared/battle';
-import { STAGE_KEYS, STAGE_NAMES, elementName, typeMult, type Content, type Move, type MonMove, type StageKey } from '@/shared/mons';
+import { STAGE_KEYS, STAGE_NAMES, STATUS_NAMES, elementName, typeMult, type Content, type Move, type MonMove, type StageKey, type StatusKind } from '@/shared/mons';
 
 export interface MoveView {
   name: string;
@@ -15,13 +15,15 @@ export interface MoveView {
   pp: number;
   maxPp: number;
   effect: string;
+  /** 非伤害招式的一句话说明（伤害招式为空） */
+  desc: string;
 }
 
 /** 倍率 → 克制文字；1 倍不显示。 */
 export function effectText(mult: number): string {
   if (mult === 0) return '无效';
-  if (mult >= 2) return `效果拔群 ×${mult}`;
-  if (mult > 0 && mult < 1) return `效果不佳 ×${mult}`;
+  if (mult >= 2) return '克制';
+  if (mult > 0 && mult < 1) return '削弱';
   return '';
 }
 
@@ -37,7 +39,21 @@ export function moveView(ct: Content, move: Move, pp: number, foeTypes: readonly
     pp,
     maxPp: move.pp,
     effect: effectText(typeMult(ct.elements, move.type, foeTypes)),
+    desc: moveDesc(move),
   };
+}
+
+/** 非伤害招式的一句话说明：优先用 `desc`，否则按 heal / guard / stat 自动生成 */
+export function moveDesc(m: Move): string {
+  if (m.desc) return m.desc;
+  if (m.heal) {
+    const pct = m.heal.ratio >= 1 ? '回满' : `回复 ${m.heal.ratio === 0.5 ? '1/2' : m.heal.ratio === 0.25 ? '1/4' : `${Math.round(m.heal.ratio * 100)}%`} 生命`;
+    return m.heal.selfSleep ? `${pct}，但会睡 ${m.heal.selfSleep} 回合` : pct;
+  }
+  if (m.guard) return '本回合免伤（连续使用成功率减半）';
+  if (m.drain) return `造成伤害的 ${Math.round(m.drain * 100)}% 回复自身`;
+  if (m.stat) return `${m.stat.target === 'self' ? '自身' : '对方'}${STAGE_NAMES[m.stat.k]} ${m.stat.d > 0 ? '+' : '−'}${Math.abs(m.stat.d)}`;
+  return '';
 }
 
 /** 血量文字；max 为 0 / 缺失时按 1 显示，避免 NaN。 */
@@ -125,4 +141,16 @@ export function stageLog(name: string, k: StageKey, d: number): string {
   const big = Math.abs(d) >= 2;
   if (d > 0) return `${who}的${what}${big ? '大幅' : ''}提升了！`;
   return `${who}的${what}${big ? '大幅' : ''}降低了！`;
+}
+
+// ------------------------------------------------------------------ 状态异常
+/** 状态标签文字（必须有文字，不能只靠颜色） */
+export const statusText = (k: StatusKind): string => STATUS_NAMES[k];
+/** 状态日志：施加 / 每回合伤害 / 解除 / 无法行动 */
+export function statusLog(name: string, k: StatusKind, kind: 'apply' | 'dmg' | 'end' | 'blocked'): string {
+  const n = STATUS_NAMES[k];
+  if (kind === 'apply') return `${name}${k === 'sleep' ? '睡着了！' : k === 'freeze' ? '被冻住了！' : `陷入了${n}状态！`}`;
+  if (kind === 'dmg') return `${name}因${n}受到了伤害！`;
+  if (kind === 'end') return `${name}${k === 'sleep' ? '醒来了' : k === 'freeze' ? '解冻了' : `的${n}解除了`}！`;
+  return `${name}${k === 'sleep' ? '正在睡觉' : k === 'freeze' ? '被冻住了' : `被${n}麻痹住了`}，无法行动！`;
 }

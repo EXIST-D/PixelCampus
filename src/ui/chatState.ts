@@ -8,8 +8,8 @@ import type { ChatMessage } from '@/shared/chat';
 export const KEEP = 60;
 export { DEFAULT_CHANNEL_STATES, OFFLINE_CHANNEL_STATES };
 
-/** 这条消息属于哪个频道：系统消息一律进系统频道；广播消息进它带的频道（服务端下发时写 world），聊天消息按 ch（不写 = 世界） */
-export const channelOf = (m: Pick<ChatMessage, 'kind' | 'ch'>): ChannelId => (m.kind === 'system' ? 'sys' : m.ch && isChannelId(m.ch) ? m.ch : 'world');
+/** 这条消息属于哪个频道：系统消息和全服播报（神话鱼 / 刷新纪录）一律进系统频道，不占世界频道；聊天消息按 ch（不写 = 世界） */
+export const channelOf = (m: Pick<ChatMessage, 'kind' | 'ch'>): ChannelId => (m.kind === 'system' || m.kind === 'broadcast' ? 'sys' : m.ch && isChannelId(m.ch) ? m.ch : 'world');
 
 export interface Received {
   ch: ChannelId;
