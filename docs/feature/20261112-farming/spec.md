@@ -1,4 +1,6 @@
-# 校园耕作：种植 / 浇水 / 收获 / 偷菜
+# IR #19 · 校园耕作：种植 / 浇水 / 收获 / 偷菜
+
+> 对应 Issue：[#19 校园耕作系统：种植/收获/偷菜（QQ 农场 + 星露谷）](https://github.com/EXIST-D/PixelCampus/issues/19)
 
 > 状态：**已确认（2026-11-13）；客户端与共享规则已实现，服务端待主人在私有库接上（见 plan.md §3.3）**
 > 规范：[docs/feature/spec.md](../spec.md)

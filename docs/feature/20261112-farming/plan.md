@@ -1,4 +1,6 @@
-# 校园耕作 — 实施计划
+# 实现计划 · IR #19 校园耕作
+
+> 对应需求：[spec.md](spec.md) · Issue [#19](https://github.com/EXIST-D/PixelCampus/issues/19)
 
 | 项 | 内容 |
 |---|---|
