@@ -130,7 +130,7 @@ export class BattleUi {
         case 'hit': {
           if (e.side === 'foe') this.view.foeHp = e.hp; else this.view.hp[this.view.lead] = e.hp;
           this.renderStage(); snd('click');
-          const note = e.dmg === 0 ? '完全没有效果……' : `${e.mult >= 2 ? '效果拔群！' : ''}${e.mult > 0 && e.mult < 1 ? '效果不太好……' : ''}${e.crit ? '击中要害！' : ''}`;
+          const note = e.dmg === 0 ? '完全没有效果……' : `${e.mult >= 2 ? '克制！' : ''}${e.mult > 0 && e.mult < 1 ? '削弱……' : ''}${e.crit ? '击中要害！' : ''}`;
           if (note) this.say(note);
           await anim(e.side === 'foe' ? this.foeImg : this.meImg, 'hit', 420); break;
         }
@@ -201,7 +201,7 @@ export class BattleUi {
     if (!list.length && !status) return;
     const box = el('div', 'bt-stages');
     if (status) box.append(el('span', `bt-status ${status}`, statusText(status)));
-    for (const t of list) { const up = t.includes('+'); const b = el('span', 'bt-stage' + (up ? ' up' : ' down'), t); box.append(b); }
+    for (const t of list) { const up = t.includes('+'); const b = el('span', 'bt-stage-tag' + (up ? ' up' : ' down'), t); box.append(b); }
     card.append(box);
   }
 
@@ -241,7 +241,9 @@ export class BattleUi {
         const d = CONTENT.moves.get(x.id); if (!d) return;
         const v = moveView(CONTENT, d, x.pp, foeTypes);
         const b = el('button', 'btn bt-move'); b.type = 'button';
-        b.append(badge(d.type), el('span', 'mon-mname', v.name), el('span', 'bt-mmeta', `${v.cat} 威力${v.power} 命中${v.acc}%  PP ${v.pp}/${v.maxPp}`));
+        const power = v.power ? `${v.power}` : '—';
+        b.append(badge(d.type), el('span', 'mon-mname', v.name), el('span', 'bt-mmeta', `${v.cat} 威力${power} 命中${v.acc}%  PP ${v.pp}/${v.maxPp}`));
+        if (v.desc) b.append(el('span', 'bt-mmove-desc', v.desc));
         if (v.effect) b.append(el('span', 'bt-eff', v.effect));
         b.style.borderColor = COLOR.get(d.type) ?? '';
         b.disabled = this.busy || (x.pp <= 0 && me.mv.some((y) => y.pp > 0));
