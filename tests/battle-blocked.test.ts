@@ -48,11 +48,11 @@ describe('不能行动时不会死锁', () => {
   it('P4：连续推进直到状态解除，不会卡住', () => {
     const b = blocked('sleep');
     let guard = 0;
-    while (statusOf(b, b.squad[0]) && guard++ < 10) {
+    while (statusOf(b, b.squad[0]).length && guard++ < 10) {
       const r = step(CT, b, { t: 'move', i: 0 }, makeRng(guard));
       expect(r.ok).toBe(true);
     }
-    expect(statusOf(b, b.squad[0])).toBeUndefined();
+    expect(statusOf(b, b.squad[0])).toEqual([]);
     expect(b.phase).not.toBe('over');
   });
 
