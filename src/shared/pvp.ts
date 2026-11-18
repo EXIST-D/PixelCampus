@@ -156,7 +156,7 @@ export function pvpStep(ct: Content, bb: PvpBattle, rnd: Rng): PvpStepResult {
         const { d, v } = bumpStage(bb, target, move.stat.k, move.stat.d);
         if (d !== 0) pushBoth({ t: 'stage', side: targetSide, k: move.stat.k, d, v }, (x) => ({ t: 'stage', side: (x as Extract<BEvent, { t: 'stage' }>).side === 'me' ? 'foe' : 'me', k: move.stat!.k, d, v }));
       }
-      if (foe.hp <= 0) { pushBoth({ t: 'faint', side: 'foe' }, (x) => ({ t: 'faint', side: 'me' })); bb.stages.delete(foe.id); return true; }
+      if (foe.hp <= 0) { pushBoth({ t: 'faint', side: 'foe' }, (x) => ({ t: 'faint', side: 'me' })); bb.stages.delete(foe.id); bb.status.delete(foe.id); return true; }
     }
     return false;
   };
@@ -178,15 +178,16 @@ export function pvpStep(ct: Content, bb: PvpBattle, rnd: Rng): PvpStepResult {
   }
 
   // 倒下的一方自动换下一只（还有活的就继续）
-  const autoSwap = (s: PvpSide, ev: BEvent[], mine: boolean): void => {
+  // 事件要分视角：自己换人给自己一条 swap，给对方一条 foeswap（以前把对方的换人也塞进了 A 的列表里，A 的界面会把它当成「我换上了第 i 只」，显示成错的精灵）
+  const autoSwap = (s: PvpSide, evSelf: BEvent[], evOther: BEvent[]): void => {
     if (monOf(s).hp > 0) return;
     const next = s.squad.findIndex((m) => m.hp > 0);
     if (next < 0) return;
     s.lead = next;
-    ev.push({ t: 'swap', i: next });
-    void mine;
+    evSelf.push({ t: 'swap', i: next });
+    evOther.push({ t: 'foeswap', i: next });
   };
-  if (overRef.phase !== 'over') { autoSwap(bb.a, evA, true); autoSwap(bb.b, evA, false); }
+  if (overRef.phase !== 'over') { autoSwap(bb.a, evA, evB); autoSwap(bb.b, evB, evA); }
 
   // 判胜负
   if (overRef.phase !== 'over') {

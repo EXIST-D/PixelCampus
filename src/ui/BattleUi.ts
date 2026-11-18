@@ -170,6 +170,8 @@ export class BattleUi {
         case 'foeswap': {
           const nm = m.foe.sp ? speciesOf(m.foe.sp)?.name ?? m.foe.sp : '';
           this.say(`${m.trainer?.name ?? '对手'} 派出了 ${nm}！`);
+          // 新上场的对手是一只全新的精灵：血量、能力等级、状态都从它自己的开始算（以前只换了名字和立绘，血条停在上一只的 0 滴血、增益 / 减益标签也跟着带了过来）
+          this.view.foeHp = m.foe.hp; this.view.foeMax = m.foe.max; this.view.foeStages = {}; this.view.foeStatus = null;
           this.renderStage();
           await this.wait(600);
           break;

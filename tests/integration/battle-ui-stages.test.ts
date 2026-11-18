@@ -66,6 +66,18 @@ describe('战斗界面 · 能力等级', () => {
     expect(log).toMatch(/降低了|大幅降低了/);
   });
 
+  it('训练家换上新精灵：新精灵是满血、没有上一只的能力等级 / 状态标签（以前血条停在 0、增益标签也带过来）', async () => {
+    await send(bt({ foe: { sp: 'o04', lv: 5, hp: 10, max: 20 } }));
+    // 第一只被打得「攻击 −2」，随后倒下，对手换上第二只（服务器给的是这只新精灵的满血状态）
+    await send(bt({ turn: 2, ev: [{ t: 'stage', side: 'foe', k: 'atk', d: -2, v: -2 }, { t: 'status', side: 'foe', k: 'poison' }, { t: 'hit', side: 'foe', dmg: 10, hp: 0, mult: 1, crit: false }, { t: 'faint', side: 'foe' }, { t: 'foeswap', i: 1 }], foe: { sp: 'o04', lv: 7, hp: 28, max: 28 }, trainer: { id: 't1', name: '学长', squad: 2 } as never }));
+    const foe = document.querySelector('.bt-card.foe')?.textContent ?? '';
+    expect(foe).toContain('Lv.7');
+    expect(foe).not.toContain('攻击');        // 没有上一只的能力等级
+    expect(foe).not.toContain('中毒');        // 没有上一只的状态
+    expect(document.querySelectorAll('.bt-card.foe .bt-stage-tag').length).toBe(0);
+    expect(document.body.textContent ?? '').toContain('28/28');                 // 血条是新精灵的满血
+  });
+
   it('没有能力等级时不显示这一行', async () => {
     await send(bt());
     expect(document.querySelectorAll('.bt-stages').length).toBe(0);

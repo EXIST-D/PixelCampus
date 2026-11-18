@@ -302,7 +302,7 @@ export function step(ct: Content, b: Battle, act: Action, rnd: Rng): StepResult 
       const back = Math.max(1, Math.floor(r.dmg * m.recoil));
       atk.hp = Math.max(0, atk.hp - back);
       ev.push({ t: 'hit', side: side === 'me' ? 'me' : 'foe', dmg: back, hp: atk.hp, mult: 1, crit: false });
-      if (atk.hp <= 0) { ev.push({ t: 'faint', side }); b.stages.delete(atk.id); return true; }
+      if (atk.hp <= 0) { ev.push({ t: 'faint', side }); b.stages.delete(atk.id); b.status.delete(atk.id); return true; }
     }
     // 吸取：按造成伤害的比例回血
     if (m.drain && r.dmg > 0) {
@@ -323,7 +323,7 @@ export function step(ct: Content, b: Battle, act: Action, rnd: Rng): StepResult 
         if (d !== 0) ev.push({ t: 'stage', side: targetSide, k: st.k, d, v });
       }
     }
-    if (def.hp <= 0) { ev.push({ t: 'faint', side: side === 'me' ? 'foe' : 'me' }); b.stages.delete(def.id); return true; }
+    if (def.hp <= 0) { ev.push({ t: 'faint', side: side === 'me' ? 'foe' : 'me' }); b.stages.delete(def.id); b.status.delete(def.id); return true; }
     return false;
   };
   const wildMove = (): Move => {
@@ -426,7 +426,7 @@ export function step(ct: Content, b: Battle, act: Action, rnd: Rng): StepResult 
       const dmg = Math.max(1, Math.floor(maxHp(ct, mon) / (st.k === 'poison' ? 8 : 16)));
       mon.hp = Math.max(0, mon.hp - dmg);
       ev.push({ t: 'statusdmg', side, k: st.k, dmg, hp: mon.hp });
-      if (mon.hp <= 0) { ev.push({ t: 'faint', side }); b.stages.delete(mon.id); return; }
+      if (mon.hp <= 0) { ev.push({ t: 'faint', side }); b.stages.delete(mon.id); b.status.delete(mon.id); return; }
     }
   };
   if (!over) { tick('me', me()); tick('foe', foe); }
