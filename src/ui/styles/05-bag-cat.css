@@ -38,6 +38,8 @@
 .cat-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; }
 .cat-grid .btn, .cat-fish { min-height: 30px; padding: 2px 4px; font-size: 13px; line-height: 1.2; font-family: inherit; color: var(--ink); }
 .cat-grid .btn:disabled, .cat-bye:disabled { opacity: .45; cursor: default; }
+.cat-grid .btn { white-space: pre-line; } /* 按钮第二行写好感涨幅 */
+.cat-gain-tip { font-size: 12px; opacity: .7; margin: 4px 2px 2px; line-height: 1.45; }
 .cat-fishlist { display: flex; flex-direction: column; gap: 3px; max-height: 150px; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .cat-page.fish-open { max-height: none; overflow-y: visible; }   /* 选鱼列表展开：页面本身不限高 / 不滚，只留列表自己和外层面板两层滚动 */
 .cat-fish { text-align: left; }

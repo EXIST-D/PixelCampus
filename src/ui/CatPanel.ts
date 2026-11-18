@@ -1,6 +1,6 @@
 import type Phaser from 'phaser';
 import type { CatDef, CatInfo, CatResult } from '@/shared/cats';
-import { BOND_LEVEL, CAT_NICK_MAX, DORM_CAT_AT, FEED_COOLDOWN_MS, HUG_LEVEL, LEVEL_AT, LEVEL_NAMES, LEVEL_PERKS, PET_COOLDOWN_MS, TAME_AT, catLevel, catNext } from '@/shared/cats';
+import { BOND_LEVEL, CAT_NICK_MAX, DORM_CAT_AT, FEED_COOLDOWN_MS, FEED_GAIN, HUG_FIRST_GAIN, HUG_GAIN, HUG_LEVEL, PET_GAIN, LEVEL_AT, LEVEL_NAMES, LEVEL_PERKS, PET_COOLDOWN_MS, TAME_AT, catLevel, catNext } from '@/shared/cats';
 import { catProfile, isLiked, levelName, likesKnown, storiesUnlocked } from '@/shared/cat-lore';
 import { FISH_FEED_GAIN, type Rarity } from '@/shared/fishing';
 import { itemDef } from '@/shared/items';
@@ -115,7 +115,8 @@ export class CatPanel {
     }
     // 互动页
     const actPage = el('div', 'cat-page'); const grid = el('div', 'cat-grid'); grid.append(this.bPet, this.bHug, this.bFood, this.bTreat, this.bFish, this.bBed); this.logHead.type = 'button'; this.logHead.addEventListener('click', () => { this.logOpen = !this.logOpen; this.logSig = ''; this.renderLog(); });
-    actPage.append(grid, this.fishList, this.logHead, this.logList);
+    const gainTip = el('div', 'cat-gain-tip', '每个互动的好感涨幅写在按钮上；每天第一次和它互动额外 +2（连续探望每满 3 天再 +1，最多 +3）。每次互动后下面的记录会写「好感 +N」。');
+    actPage.append(grid, gainTip, this.fishList, this.logHead, this.logList);
     // 档案页
     const dos = el('div', 'cat-page hidden'); dos.append(this.dossier);
     // 羁绊页
@@ -209,12 +210,15 @@ export class CatPanel {
     const { food, treat, fish, ex } = this.last, online = this.online, lv = this.lv, c = this.cd();
     const pc = this.left(c.pet), fc = this.left(c.feed), hc = this.left(c.hug), cdText = (s: number) => (s > 0 ? ` · ${s}s` : '');
     const liked = (id: string) => likesKnown(lv, !!ex.info?.fv) && isLiked(this.cat!, id) ? ' ♥' : '';
-    this.bPet.textContent = `摸一摸 (1)${cdText(pc)}`; this.bPet.disabled = pc > 0;
-    this.bFood.textContent = `喂猫粮 ×${food}${liked('cat_food')} (2)${cdText(fc)}`; this.bFood.disabled = !online || food <= 0 || fc > 0;
-    this.bTreat.textContent = `喂猫条 ×${treat}${liked('cat_treat')} (3)${cdText(fc)}`; this.bTreat.disabled = !online || treat <= 0 || fc > 0;
-    this.bFish.textContent = `喂鱼 ×${fish} (4)${this.fishOpen ? ' ▴' : fish > 1 ? ' ▾' : ''}${cdText(fc)}`; this.bFish.disabled = !online || fish <= 0 || fc > 0;
+    // 每个互动按钮第二行写明这次能涨多少好感（喂到它的最爱翻倍；最爱要好感到一定程度才揭晓，没揭晓前不标）
+    const gain = (base: number, id?: string) => (id && liked(id) ? `好感 +${base * 2}（最爱翻倍）` : `好感 +${base}`);
+    const fishVals = Object.values(FISH_FEED_GAIN), fishGain = `好感 +${Math.min(...fishVals)}~${Math.max(...fishVals)}（看鱼的稀有度，最爱翻倍）`;
+    this.bPet.textContent = `摸一摸 (1)${cdText(pc)}\n${gain(PET_GAIN)}`; this.bPet.disabled = pc > 0;
+    this.bFood.textContent = `喂猫粮 ×${food}${liked('cat_food')} (2)${cdText(fc)}\n${gain(FEED_GAIN.cat_food, 'cat_food')}`; this.bFood.disabled = !online || food <= 0 || fc > 0;
+    this.bTreat.textContent = `喂猫条 ×${treat}${liked('cat_treat')} (3)${cdText(fc)}\n${gain(FEED_GAIN.cat_treat, 'cat_treat')}`; this.bTreat.disabled = !online || treat <= 0 || fc > 0;
+    this.bFish.textContent = `喂鱼 ×${fish} (4)${this.fishOpen ? ' ▴' : fish > 1 ? ' ▾' : ''}${cdText(fc)}\n${fishGain}`; this.bFish.disabled = !online || fish <= 0 || fc > 0;
     this.bBed.textContent = ex.hasBed ? '已有窝 🛏' : `送猫窝 ×${ex.bed ?? 0} (7)`; this.bBed.disabled = !online || !!ex.hasBed || (ex.bed ?? 0) <= 0;
-    this.bHug.textContent = lv < HUG_LEVEL ? `抱抱（${LEVEL_NAMES[HUG_LEVEL]}解锁）` : `抱抱 (H)${cdText(hc)}`; this.bHug.disabled = !online || lv < HUG_LEVEL || hc > 0;
+    this.bHug.textContent = lv < HUG_LEVEL ? `抱抱（${LEVEL_NAMES[HUG_LEVEL]}解锁）` : `抱抱 (H)${cdText(hc)}\n好感 +${HUG_GAIN}（今天第一次抱 +${HUG_FIRST_GAIN}）`; this.bHug.disabled = !online || lv < HUG_LEVEL || hc > 0;
     this.bFollow.textContent = ex.following ? '让它回家 (5)' : ex.withOther ? '它正陪着别人' : '让它跟着我 (5)';
     this.bFollow.disabled = !online || !this.canBond || (!ex.following && ex.withOther);
     this.bNick.textContent = ex.nick ? '改名 (6)' : '取名 (6)'; this.bNick.disabled = !online || !this.canBond;
