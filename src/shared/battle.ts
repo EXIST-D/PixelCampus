@@ -69,6 +69,8 @@ export interface Battle extends FighterState {
   foeSquad: Mon[];
   /** 对方当前上场在 foeSquad 里的下标 */
   foeLead: number;
+  /** 训练家对战（逃跑一定成功：算认输离开，没有奖励）；野生战斗不写 */
+  trainer?: boolean;
   /** 兼容别名：野生战斗中就是 foeSquad[0] */
   wild: Mon;
   squad: Mon[];
@@ -112,7 +114,7 @@ export function startTrainerBattle(bid: string, foeSquad: Mon[], squad: Mon[]): 
   const lead = squad.findIndex((m) => m.hp > 0);
   const foeLead = foeSquad.findIndex((m) => m.hp > 0);
   if (lead < 0 || foeLead < 0) throw new Error('队伍里没有能战斗的精灵');
-  return { bid, turn: 1, foeSquad, foeLead, wild: foeSquad[foeLead], squad, lead, fought: [lead], phase: 'choose', runs: 0, stages: new Map(), status: new Map(), guardChain: new Map(), guarding: new Map() };
+  return { bid, turn: 1, foeSquad, foeLead, wild: foeSquad[foeLead], squad, lead, fought: [lead], phase: 'choose', runs: 0, stages: new Map(), status: new Map(), guardChain: new Map(), guarding: new Map(), trainer: true };
 }
 
 /** 对方当前上场的精灵 */
@@ -405,7 +407,8 @@ export function step(ct: Content, b: Battle, act: Action, rnd: Rng): StepResult 
     b.lead = act.i; if (!b.fought.includes(act.i)) b.fought.push(act.i);
     ev.push({ t: 'swap', i: act.i }); foeTurn();
   } else if (act.t === 'run') {
-    if (rnd() < runChance(mySt().spe, foeSt().spe, b.runs++)) { ev.push({ t: 'escape' }); b.phase = 'over'; b.result = 'fled'; return { ok: true, ev }; }
+    // 训练家对战里逃跑一定成功（认输离开）；野生精灵按速度碰运气
+    if (b.trainer || rnd() < runChance(mySt().spe, foeSt().spe, b.runs++)) { ev.push({ t: 'escape' }); b.phase = 'over'; b.result = 'fled'; return { ok: true, ev }; }
     ev.push({ t: 'stuck' }); foeTurn();
   } else if (act.t === 'ball') {
     ev.push({ t: 'throw' });

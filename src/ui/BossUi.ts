@@ -257,16 +257,16 @@ export class BossUi {
     const me = m.players.find((p) => p.uid === this.net.selfUid);
     if (!me) { this.menu.append(this.btn('关闭', () => this.close(), 'btn primary')); return; }
     if (m.phase === 'over') { this.menu.append(this.btn('离开', () => this.close(), 'btn primary')); return; }
-    if (me.down) { this.menu.append(el('div', 'mon-sub', '你的精灵都倒下了，等队友打完吧')); return; }
+    if (me.down) { this.menu.append(el('div', 'mon-sub', '你的精灵都倒下了，等队友打完吧'), this.btn('离开', () => this.close())); return; }
     if (m.phase === 'choose' && (this.submitted || me.ready)) {
-      this.menu.append(el('div', 'mon-sub', '这一回合已经出招，等队友……'));
+      this.menu.append(el('div', 'mon-sub', '这一回合已经出招，等队友……'), this.btn('逃跑', () => this.flee()));
       return;
     }
     if (this.mode === 'main') {
       const fight = this.btn('战斗', () => { this.mode = 'moves'; this.renderMenu(); }, 'btn primary');
       const swap = this.btn('换精灵', () => { this.mode = 'swap'; this.renderMenu(); });
       swap.disabled = this.busy || me.squad.filter((x, i) => i !== me.lead && x.hp > 0).length === 0;
-      this.menu.append(fight, swap);
+      this.menu.append(fight, swap, this.btn('逃跑', () => this.flee()));
     } else if (this.mode === 'moves') {
       const mon = me.squad[me.lead];
       const bossTypes = speciesOf(m.boss.sp)?.types ?? [];
@@ -291,6 +291,12 @@ export class BossUi {
       });
       this.menu.append(this.btn('返回', () => { this.mode = 'main'; this.renderMenu(); }));
     }
+  }
+
+  /** 逃跑：这场不再算你（队友继续打），也拿不到奖励；任何时候都能点（等队友出招时也行），先问一句免得误点 */
+  private flee() {
+    if (!window.confirm('逃跑后这场挑战不再算你，也拿不到奖励（队友会继续）。确定要离开吗？')) return;
+    this.close();
   }
 
   /** 关掉界面（默认告诉服务器我走了）；服务器已经判我出局时用 close(false) */

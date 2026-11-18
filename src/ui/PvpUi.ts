@@ -110,6 +110,7 @@ export class PvpUi {
         case 'hit': this.renderStage(); await sleep(320); break;
         case 'faint': this.say(`${e.side === 'me' ? nameOf(this.me(m)) : nameOf(this.foeMon(m))} 倒下了！`); await sleep(500); break;
         case 'swap': this.say(`${e.i === 0 ? '' : ''}${nameOf(m.me.squad[e.i] as unknown as Mon)} 上场了！`); this.renderStage(); await sleep(400); break;
+        case 'foeswap': this.say(`${m.foe.name} 派出了 ${nameOf(m.foe.squad[e.i] as unknown as Mon)}！`); this.renderStage(); await sleep(400); break;
         case 'blocked': this.say(`${e.side === 'me' ? '你' : m.foe.name} 无法行动！`); await sleep(350); break;
         case 'stage': this.say(stageLog(e.side === 'me' ? '你' : m.foe.name, e.k, e.d)); this.renderStage(); await sleep(300); break;
         case 'status': this.say(`${e.side === 'me' ? '你' : m.foe.name} 陷入了异常状态！`); this.renderStage(); await sleep(300); break;
@@ -170,12 +171,12 @@ export class PvpUi {
     const m = this.st; if (!m) return;
     if (m.phase === 'over') { this.menu.append(this.btn('离开', () => this.close(), 'btn primary')); return; }
     // 已经出招、在等对方：明确写一句，别只把按钮灰掉（玩家会以为技能用不了）
-    if (this.submitted || this.busy) { this.menu.append(el('div', 'mon-sub', '这一回合已经出招，等对方……')); return; }
+    if (this.submitted || this.busy) { this.menu.append(el('div', 'mon-sub', '这一回合已经出招，等对方……'), this.btn('逃跑', () => this.flee())); return; }
     if (this.mode === 'main') {
       this.menu.append(
         this.btn('战斗', () => { this.mode = 'moves'; this.renderMenu(); }, 'btn primary'),
         this.btn('换精灵', () => { this.mode = 'swap'; this.renderMenu(); }),
-        this.btn('逃跑', () => this.act({ t: 'run' })),
+        this.btn('逃跑', () => this.flee()),
       );
       const swap = this.menu.children[1] as HTMLButtonElement;
       swap.disabled = this.busy || m.me.squad.filter((x, i) => i !== m.me.lead && x.hp > 0).length === 0;
@@ -201,6 +202,12 @@ export class PvpUi {
       });
       this.menu.append(this.btn('返回', () => { this.mode = 'main'; this.renderMenu(); }));
     }
+  }
+
+  /** 逃跑 = 认输离开：一定成功，对方判胜（等对方出招的时候也能点）；先问一句，别误点 */
+  private flee() {
+    if (!window.confirm('逃跑算认输，对方判胜。确定要离开这场对战吗？')) return;
+    this.close();
   }
 
   close() {

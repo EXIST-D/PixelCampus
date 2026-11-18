@@ -119,15 +119,9 @@ export function pvpStep(ct: Content, bb: PvpBattle, rnd: Rng): PvpStepResult {
     const pushBoth = (e: BEvent, mirror: (m: BEvent) => BEvent) => { evA.push(e); evB.push(mirror(e)); };
 
     if (act.t === 'run') {
-      const tries = bb.runs.get(atk.uid) ?? 0; bb.runs.set(atk.uid, tries + 1);
-      const mySpe = monStats(ct, me).spe * stageMul(stagesOf(bb, me).spe) * paraSpeMul(bb, me);
-      const foeSpe = monStats(ct, foe).spe * stageMul(stagesOf(bb, foe).spe) * paraSpeMul(bb, foe);
-      if (rnd() < runChance(mySpe, foeSpe, tries)) {
-        pushBoth({ t: 'escape' }, (x) => x);
-        bb.phase = 'over'; bb.result = { winner: atkSide === 'a' ? 'b' : 'a', reason: 'fled' };
-        return false;
-      }
-      pushBoth({ t: 'stuck' }, (x) => x);
+      // 玩家对战里逃跑 = 认输离开：一定成功，对方判胜（不再按速度碰运气，免得「点了逃跑却逃不掉」）
+      pushBoth({ t: 'escape' }, (x) => x);
+      bb.phase = 'over'; bb.result = { winner: atkSide === 'a' ? 'b' : 'a', reason: 'fled' };
       return false;
     }
 
