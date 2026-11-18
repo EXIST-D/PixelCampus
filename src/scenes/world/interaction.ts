@@ -146,17 +146,49 @@ export function runAct(sc: WorldScene, a: Act) {
   }
 }
 
-/** 训练家对话：先问要不要切磋；确认后向服务器请求开战 */
-function openTrainerAsk(sc: WorldScene, npc: Npc) {
+/** 现在能不能切磋：不能就返回原因（玩家看得懂的一句话）；服务器还会再校验（队伍空 / 精灵都没力气 / 冷却中……），它的拒绝原因也会显示出来 */
+function trainerBlockedWhy(sc: WorldScene): string | null {
+  if (sc.net.status !== 'online') return '要连上服务器才能切磋（单机模式没有训练家对战）';
+  if (sc.battleUi.isOpen || sc.pvpUi.isOpen || sc.bossUi.isOpen) return '你正在战斗中，先打完这一场';
+  return null;
+}
+
+/**
+ * 训练家对话：先问要不要切磋；确认后向服务器请求开战。
+ * - 手机上点对话框（pointerdown）会翻页 / 关闭对话——按钮的 pointerdown 必须拦住，不然手指一落下对话框就先关了，「切磋」按钮没来得及点就消失（2026-11 的 bug）。
+ * - 不能切磋时，把原因写在对话里（本地能判断的先判断，服务器拒绝的原因也显示出来）；点了「切磋」不会再什么都没发生。
+ */
+export function openTrainerAsk(sc: WorldScene, npc: Npc) {
   const t = npc.trainer!;
+  const why = trainerBlockedWhy(sc);
+  if (why) { sc.hud.openDialog(t.name, [t.before, `（现在不能切磋：${why}）`]); return; }
   sc.hud.openDialog(t.name, [t.before]);
   // 对话底部追加两个按钮（复用 hud 的 dialog 容器）
   const foot = document.getElementById('dialog-foot'); if (!foot) return;
   foot.replaceChildren();
-  const yes = document.createElement('button'); yes.className = 'btn primary'; yes.type = 'button'; yes.textContent = '切磋';
-  const no = document.createElement('button'); no.className = 'btn'; no.type = 'button'; no.textContent = '下次吧';
-  yes.addEventListener('click', (e) => { e.stopPropagation(); sc.hud.closeDialog(); sc.net.trainerBattle(t.id); });
-  no.addEventListener('click', (e) => { e.stopPropagation(); sc.hud.closeDialog(); });
+  const btn = (cls: string, text: string, onClick: () => void) => {
+    const b = document.createElement('button'); b.className = cls; b.type = 'button'; b.textContent = text;
+    b.addEventListener('pointerdown', (e) => e.stopPropagation()); // 手机：别让按下去的这一下冒泡成「点对话框 = 关闭」
+    b.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+    return b;
+  };
+  const yes = btn('btn primary', '切磋', () => {
+    const w = trainerBlockedWhy(sc);
+    if (w) { sc.hud.openDialog(t.name, [`现在不能切磋：${w}`]); return; }
+    sc.hud.openDialog(t.name, ['好，来吧！（正在发起切磋……）']);
+    let done = false;
+    const prev = sc.net.handlers.monResult;
+    sc.net.handlers.monResult = (ok, msg) => { prev?.(ok, msg); if (!ok && !done) { done = true; sc.hud.openDialog(t.name, [`现在不能切磋：${msg}`]); } }; // 服务器拒绝（冷却中 / 队伍空 / 精灵没力气……）：把原因显示出来
+    sc.net.trainerBattle(t.id);
+    const t0 = performance.now();
+    const iv = window.setInterval(() => {
+      const timeout = performance.now() - t0 > 5000;
+      if (sc.battleUi.isOpen) { done = true; if (sc.hud.dialogOpen) sc.hud.closeDialog(); } // 战斗界面起来了：收起对话
+      else if (timeout && !done) { done = true; sc.hud.openDialog(t.name, ['没有收到服务器的回应，请稍后再试']); }
+      if (done || timeout) { window.clearInterval(iv); if (sc.net.handlers.monResult !== prev) sc.net.handlers.monResult = prev; }
+    }, 150);
+  });
+  const no = btn('btn', '下次吧', () => sc.hud.closeDialog());
   foot.append(yes, no);
 }
 
@@ -175,5 +207,5 @@ export function updateInteraction(sc: WorldScene) {
   const inp = gatherInteraction(sc), d = decideInteraction(inp);
   if (d.hint !== undefined) sc.hud.hint(d.hint, d.alt?.hint);
   if (d.act) runAct(sc, d.act);
-}
   else if (d.alt && inp.altPress) runAct(sc, d.alt.act); // 第二个键只在主动作没触发时生效（同一帧两个键都按，以主动作为准）
+}
