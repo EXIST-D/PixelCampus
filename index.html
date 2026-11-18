@@ -28,10 +28,13 @@
     </div>
     <div id="loading"><img id="loading-art" src="splash.webp" alt="" decoding="async" /><div id="loading-title">像素校园</div><div id="loading-bar"><div id="loading-fill"></div></div><div id="loading-text">加载中…</div><div id="loading-credit">© 2026 EXIST-D · github.com/EXIST-D</div></div>
   </div>
-  <!-- ICP 备案号：只在备案域名 huepixel.top 上显示（exist.qd.je 不是备案域名，不挂这个号）；点击去工信部备案查询站 -->
-  <a id="icp" href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer"></a>
+  <!-- 备案号（ICP + 公安联网备案）：只在备案域名 huepixel.top 上显示（exist.qd.je 不是备案域名，不挂这两个号）；ICP 点击去工信部备案查询站，公安备案点击去公安部备案查询页 -->
+  <div id="beian">
+    <a id="icp" href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer"></a>
+    <a id="gaba" href="https://beian.mps.gov.cn/#/query/webSearch?code=11010802051306" target="_blank" rel="noreferrer noopener"><img src="beian-gaba.png" alt="" width="14" height="16" /><span></span></a>
+  </div>
   <script>
-    try { if (/(^|\.)huepixel\.top$/i.test(location.hostname)) { var icp = document.getElementById('icp'); icp.textContent = '京ICP备2026079651号-1'; icp.style.display = 'block'; } } catch (e) { /* 忽略 */ }
+    try { if (/(^|\.)huepixel\.top$/i.test(location.hostname)) { document.getElementById('icp').textContent = '京ICP备2026079651号-1'; document.querySelector('#gaba span').textContent = '京公网安备11010802051306号'; document.getElementById('beian').style.display = 'flex'; } } catch (e) { /* 忽略 */ }
   </script>
   <script type="module" src="/src/main.ts"></script>
 </body>
