@@ -37,6 +37,7 @@ import type { WorldScene } from '../WorldScene';
 export function gatherInteraction(sc: WorldScene): InteractInput {
   const p = sc.player, k = sc.keys, online = sc.net.status === 'online';
   const readPress = () => Phaser.Input.Keyboard.JustDown(k.e) || Phaser.Input.Keyboard.JustDown(k.space) || sc.touchPress;
+  const altPress = Phaser.Input.Keyboard.JustDown(k.z) || sc.altPress; // 第二个互动键：猫挡在前面时，旁边的共享单车 / 垃圾桶 / 长椅用它
   const base = { paxPid: sc.paxPid, runActive: sc.runUi.active, fishPhase: sc.fishPhase as FishPhase, sitting: p.sitting, riding: p.riding, online };
   const none = { near: null, home: false, cat: null, bird: null, baitN: 0, egg: null, mateBike: null, mateFar: null, bike: false, bin: -1, binLeft: sc.binLeft, seat: null, inStart: false, npc: null, fishSpot: false, mateNear: false };
   const noLock: FishLockState = { phase: 'idle', cardOpen: false, catching: false };
@@ -78,7 +79,7 @@ export function gatherInteraction(sc: WorldScene): InteractInput {
   const b = !near && !egg && !p.riding ? sc.lakeBirds?.nearest(p.x, p.y) ?? null : null;
   const nb = near as BuildingOut | null;
   return {
-    ...base, press, mateNear: false, lock, cast, fishSpot: !!fishSpot,
+    ...base, press, altPress, mateNear: false, lock, cast, fishSpot: !!fishSpot,
     near: nb ? { ref: nb, name: nb.name, interior: !!nb.interior, desc: nb.desc } : null,
     home: !!nb && nb.name === sc.dormUi.building && online, // 自己绑定的宿舍楼：门口按 E 回宿舍
     cat: cat ? { ref: cat, label: (cat as Cat).label, dist: cd } : null,
@@ -171,7 +172,8 @@ function bossSpot(sc: WorldScene) {
 }
 
 export function updateInteraction(sc: WorldScene) {
-  const d = decideInteraction(gatherInteraction(sc));
-  if (d.hint !== undefined) sc.hud.hint(d.hint);
+  const inp = gatherInteraction(sc), d = decideInteraction(inp);
+  if (d.hint !== undefined) sc.hud.hint(d.hint, d.alt?.hint);
   if (d.act) runAct(sc, d.act);
 }
+  else if (d.alt && inp.altPress) runAct(sc, d.alt.act); // 第二个键只在主动作没触发时生效（同一帧两个键都按，以主动作为准）

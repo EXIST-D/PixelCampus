@@ -58,10 +58,20 @@ export class Hud {
     window.clearTimeout(this.bannerTimer);
     this.bannerTimer = window.setTimeout(() => b.classList.add('hidden'), 4200);
   }
-  hint(text: string | null) {
+  private hintKey = '';
+  /** 提示框：主提示（E）+ 可选的第二个提示（Z；猫挡在前面时，旁边的共享单车等单独给一个按钮，手机上是两个分开的按钮） */
+  hint(text: string | null, alt?: string) {
     const h = $('hint');
-    if (!text) { h.classList.add('hidden'); return; }
-    h.textContent = document.body.classList.contains('touch') ? text.replace(/^E\s+/, '👆 ') : text; h.classList.remove('hidden');
+    if (!text) { h.classList.add('hidden'); this.hintKey = ''; return; }
+    const touch = document.body.classList.contains('touch'), key = `${touch}|${text}|${alt ?? ''}`;
+    h.classList.remove('hidden');
+    if (key === this.hintKey) return; // 每帧都会调用：没变就别重建 DOM（手指按下的瞬间节点被换掉会丢事件）
+    this.hintKey = key;
+    const conv = (t: string) => (touch ? t.replace(/^[EZ]\s+/, '👆 ') : t);
+    const main = document.createElement('span'); main.className = 'h-main'; main.textContent = conv(text);
+    h.replaceChildren(main);
+    if (alt) { const a = document.createElement('span'); a.className = 'h-alt'; a.textContent = conv(alt); h.append(a); }
+    h.classList.toggle('has-alt', !!alt);
   }
 
   /** 打开多页对话；pages 逐页显示，advanceDialog() 翻页，翻完自动关闭；onDone 在对话关闭（翻完或 Esc）时触发一次 */

@@ -29,6 +29,10 @@ body.touch #icp { font-size: 10px; opacity: .5; }
 #clock-fest { font-size: 13px; margin-top: 3px; color: #a03a1a; font-weight: bold; }
 #clock-fest:empty { display: none; }
 #hint { position: absolute; left: 50%; bottom: 62px; transform: translateX(-50%); font-size: 18px; white-space: nowrap; }
+#hint .h-alt { margin-left: 22px; }
+/* 手机上有两个提示时上下分开：每个都是独立的点按目标（点第二个 = 按 Z），不会再互相盖住 */
+body.touch #hint.has-alt { display: flex; flex-direction: column; gap: 6px; align-items: stretch; text-align: center; }
+body.touch #hint .h-alt { margin-left: 0; padding: 8px 12px; border-top: 2px dashed var(--wood-l); }
 #controls { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); color: #fff; font-size: 14px; text-shadow: 1px 1px 0 #000, -1px 1px 0 #000, 1px -1px 0 #000, -1px -1px 0 #000; white-space: nowrap; opacity: .9; }
 #minimap { position: absolute; left: 22px; bottom: 22px; padding: 4px; width: 200px; height: 156px; transition: all .18s steps(4); pointer-events: auto; cursor: pointer; }
 #minimap-img { position: absolute; inset: 4px; background: #17241a url('/assets/generated/minimap.webp') center/100% 100% no-repeat; image-rendering: pixelated; overflow: hidden; }

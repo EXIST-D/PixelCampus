@@ -23,10 +23,13 @@ export type Act =
   | { t: 'panel'; which: 'board' | 'shop' | 'fishshop' | 'wall' | 'portal' | 'boss' } | { t: 'egg'; ref: unknown }
   | { t: 'pax_join'; uid: number } | { t: 'bin'; idx: number } | { t: 'sit'; ref: unknown } | { t: 'run_open' } | { t: 'talk'; ref: unknown };
 /** hint：undefined = 这一帧不动提示；null = 清掉提示；string = 显示这句。act 只有按了 E / 空格 / 触屏互动才有 */
-export interface Decision { hint: string | null | undefined; act?: Act }
+/** alt = 第二个可做的事（猫挡在前面时，旁边的共享单车 / 队友的车 / 垃圾桶 / 长椅）：单独用 Z 键 / 手机上第二个按钮触发，act 一直都在（按没按键由场景判断） */
+export interface Decision { hint: string | null | undefined; act?: Act; alt?: { hint: string; act: Act } }
 
 export interface InteractInput {
   press: boolean;
+  /** 第二个互动键（Z / 手机上第二个按钮）这一帧按了没有（可选，旧测试不传） */
+  altPress?: boolean;
   paxPid: number; runActive: boolean; fishPhase: FishPhase; sitting: boolean; riding: boolean; mateNear: boolean;
   online: boolean;
   /** 钓鱼沉浸状态（含 castable：站在能抛竿的岸边且有竿有饵） */
@@ -41,6 +44,15 @@ export interface InteractInput {
   npc: { ref: unknown; name?: string; trainer?: boolean } | null;
   /** 站在世界 BOSS 入口附近（可选，旧测试不传）；world = 在公共世界（spec 只允许公共世界挑战） */
   boss?: { worldOk: boolean };
+}
+
+/** 猫排在最前面时，被它盖住的、离得也很近的另一件事：共享单车 / 队友的车 / 垃圾桶 / 长椅，单独给一个键，不再互相覆盖 */
+function altWhenCat(i: InteractInput): { hint: string; act: Act } | undefined {
+  if (i.mateBike) return { hint: `Z  坐上 ${i.mateBike.name} 的车后座`, act: { t: 'pax_join', uid: i.mateBike.uid } };
+  if (i.bike) return { hint: 'Z  扫码骑行：共享单车', act: { t: 'mount' } };
+  if (i.bin >= 0) return { hint: `Z  翻垃圾桶${i.binLeft >= 0 ? `（今天还能翻 ${i.binLeft} 次）` : ''}`, act: { t: 'bin', idx: i.bin } };
+  if (i.seat) return { hint: 'Z  坐下', act: { t: 'sit', ref: i.seat.ref } };
+  return undefined;
 }
 
 export function decideInteraction(i: InteractInput): Decision {
@@ -73,7 +85,7 @@ export function decideInteraction(i: InteractInput): Decision {
   }
   if (fishingPrefersCast(i.lock) && !near && !egg) return cast();
   // 站在猫身边按 E 一定能和它玩：猫排在彩蛋区、队友单车前面；站在建筑门口时，猫够近（< 0.75 个够得着的距离）才抢占提示
-  if (cat && !i.riding && (!near || cat.dist < CAT_REACH * 0.75)) return { hint: `E  和「${cat.label}」玩`, act: act({ t: 'open_cat', ref: cat.ref }) };
+  if (cat && !i.riding && (!near || cat.dist < CAT_REACH * 0.75)) { const alt = altWhenCat(i); return { hint: `E  和「${cat.label}」玩`, act: act({ t: 'open_cat', ref: cat.ref }), ...(alt ? { alt } : {}) }; }
   if (near) {
     const hint = i.home ? `E  回宿舍（${near.name}）` : `E  ${near.interior ? '进入' : '查看'}：${near.name}`;
     if (i.home) return { hint, act: act({ t: 'dorm_enter' }) };

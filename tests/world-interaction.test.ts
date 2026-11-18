@@ -35,6 +35,27 @@ describe('按 E 的优先级（纯规则）', () => {
     expect(decideInteraction(base({ near: door, cat: cat(CAT_REACH * 0.9), press: true })).hint).toBe('E  查看：图书馆');
     expect(decideInteraction(base({ cat: cat(CAT_REACH * 0.9) })).hint).toBe('E  和「蒲公英」玩'); // 没有门口：猫够得着就行
   });
+  it('猫 vs 共享单车 / 队友的车 / 垃圾桶 / 长椅：猫占 E，旁边那件事单独给一个键（Z），不再互相覆盖', () => {
+    const c = cat(CAT_REACH * 0.5);
+    // 只有猫：没有第二个键
+    expect(decideInteraction(base({ cat: c }))).toEqual({ hint: 'E  和「蒲公英」玩', act: undefined });
+    expect('alt' in decideInteraction(base({ cat: c }))).toBe(false);
+    // 猫 + 单车：E 玩猫，Z 骑车（第二个动作一直带着 act，按没按键由场景判断）
+    const d = decideInteraction(base({ cat: c, bike: true }));
+    expect(d.hint).toBe('E  和「蒲公英」玩');
+    expect(d.alt).toEqual({ hint: 'Z  扫码骑行：共享单车', act: { t: 'mount' } });
+    // 按了 E（press）：主动作是玩猫，第二个动作仍然在
+    const pressed = decideInteraction(base({ cat: c, bike: true, press: true }));
+    expect(pressed.act).toEqual({ t: 'open_cat', ref: 'C' }); expect(pressed.alt?.act).toEqual({ t: 'mount' });
+    // 其他会被猫盖住的事也一样
+    expect(decideInteraction(base({ cat: c, mateBike: { uid: 9, name: '小王' } })).alt).toEqual({ hint: 'Z  坐上 小王 的车后座', act: { t: 'pax_join', uid: 9 } });
+    expect(decideInteraction(base({ cat: c, bin: 2, binLeft: 3 })).alt).toEqual({ hint: 'Z  翻垃圾桶（今天还能翻 3 次）', act: { t: 'bin', idx: 2 } });
+    expect(decideInteraction(base({ cat: c, seat: { ref: 's' } })).alt).toEqual({ hint: 'Z  坐下', act: { t: 'sit', ref: 's' } });
+    // 同时有好几样：优先级 队友的车 > 单车 > 垃圾桶 > 长椅
+    expect(decideInteraction(base({ cat: c, bike: true, bin: 1, seat: { ref: 's' } })).alt?.act).toEqual({ t: 'mount' });
+    // 骑着车时没有猫的事（锁车下车优先），也没有第二个键
+    expect('alt' in decideInteraction(base({ cat: c, bike: true, riding: true }))).toBe(false);
+  });
   it('建筑门口：自己的宿舍楼回宿舍（要在线）；能进的进；不能进的弹说明', () => {
     expect(decideInteraction(base({ near: { ...door, name: '四社区E楼' }, home: true, press: true }))).toEqual({ hint: 'E  回宿舍（四社区E楼）', act: { t: 'dorm_enter' } });
     expect(decideInteraction(base({ near: { ...door, interior: true }, press: true }))).toEqual({ hint: 'E  进入：图书馆', act: { t: 'enter_interior', ref: 'B' } });

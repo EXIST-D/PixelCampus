@@ -79,7 +79,7 @@ import { updateBoardEntry, updatePlace } from './world/place';
 import { buildLighting, buildStream, mapLabels, tickStream, updateBuildingFade } from './world/stream';
 import { wireSocial } from './world/wire-panels';
 
-export type Keys = Record<'l' | 'up' | 'down' | 'left' | 'right' | 'w' | 'a' | 's' | 'd' | 'shift' | 'e' | 'space' | 'esc' | 'v' | 'm' | 'c' | 'b' | 'n' | 'f' | 'i' | 'j' | 'k' | 'q' | 't' | 'x' | 'p' | 'h' | 'g' | 'r' | 'y' | 'u' | 'o' | 'enter' | 'plus' | 'minus' | 'plus2' | 'minus2', Phaser.Input.Keyboard.Key>;
+export type Keys = Record<'z' | 'l' | 'up' | 'down' | 'left' | 'right' | 'w' | 'a' | 's' | 'd' | 'shift' | 'e' | 'space' | 'esc' | 'v' | 'm' | 'c' | 'b' | 'n' | 'f' | 'i' | 'j' | 'k' | 'q' | 't' | 'x' | 'p' | 'h' | 'g' | 'r' | 'y' | 'u' | 'o' | 'enter' | 'plus' | 'minus' | 'plus2' | 'minus2', Phaser.Input.Keyboard.Key>;
 
 export class WorldScene extends Phaser.Scene {
   world!: WorldMap;
@@ -203,6 +203,8 @@ export class WorldScene extends Phaser.Scene {
   touchUi?: TouchControls;
   /** 触屏的"互动"/点提示/点对话框：置位后由下一帧的 update 当作按了 E 处理 */
   touchPress = false;
+  /** 第二个互动键（Z / 手机上提示框里的第二个按钮）：猫挡在前面时，旁边的共享单车 / 垃圾桶 / 长椅单独用它 */
+  altPress = false;
   /** 我现在拿的手持物（0 = 没拿）：V 键 / 菜单「手持物」依次切换，联机时同步给看得见我的人 */
   heldId = 0;
   /** 流式构建的状态：路灯光晕、建筑淡出（每栋楼的翼体范围 + 当前透明度）、建筑图集按页加载的等待队列；镜头缩放的用户偏移 */
@@ -248,7 +250,7 @@ export class WorldScene extends Phaser.Scene {
     const K = Phaser.Input.Keyboard.KeyCodes;
     this.keys = kb.addKeys({
       up: K.UP, down: K.DOWN, left: K.LEFT, right: K.RIGHT, w: K.W, a: K.A, s: K.S, d: K.D, shift: K.SHIFT, e: K.E, space: K.SPACE,
-      esc: K.ESC, v: K.V, m: K.M, c: K.C, b: K.B, n: K.N, f: K.F, i: K.I, j: K.J, k: K.K, q: K.Q, t: K.T, x: K.X, p: K.P, h: K.H, g: K.G, r: K.R, y: K.Y, u: K.U, o: K.O, l: K.L, enter: K.ENTER, plus: K.PLUS, minus: K.MINUS, plus2: K.NUMPAD_ADD, minus2: K.NUMPAD_SUBTRACT,
+      esc: K.ESC, z: K.Z, v: K.V, m: K.M, c: K.C, b: K.B, n: K.N, f: K.F, i: K.I, j: K.J, k: K.K, q: K.Q, t: K.T, x: K.X, p: K.P, h: K.H, g: K.G, r: K.R, y: K.Y, u: K.U, o: K.O, l: K.L, enter: K.ENTER, plus: K.PLUS, minus: K.MINUS, plus2: K.NUMPAD_ADD, minus2: K.NUMPAD_SUBTRACT,
     }) as Keys;
     // 主键盘 =/- 的 keyCode
     this.placeKey = kb.addKey(190); // 句号键 .：打开地点留言板（字母键都被占满了）
@@ -330,13 +332,14 @@ export class WorldScene extends Phaser.Scene {
       mountOrientation();
       this.touchUi.setChatBadge(this.chatUnread);
       const tap = () => this.pressTouch();
-      document.getElementById('hint')?.addEventListener('pointerdown', tap);   // 点提示 = 按 E
+      document.getElementById('hint')?.addEventListener('pointerdown', (e) => { if ((e.target as HTMLElement | null)?.closest('.h-alt')) this.pressAlt(); else tap(); });   // 点提示 = 按 E；点提示里的第二个按钮（.h-alt）= 按 Z
       document.getElementById('dialog')?.addEventListener('pointerdown', tap); // 点对话框 = 翻页/关闭
     };
     if (isTouchDevice()) on();
     else window.addEventListener('pointerdown', (e) => { if (e.pointerType === 'touch') on(); });
   }
   /** 触屏的"互动"/点提示/点对话框：本场景当作按了 E；同时记在 registry 里，室内场景（InteriorScene）也读它——室内没有自己的触控，摇杆和互动键是同一套 DOM 控件 */
+  pressAlt() { this.altPress = true; }
   pressTouch() { this.touchPress = true; this.registry.set('touchPress', true); }
 
   editProfile(wardrobe = false) {
@@ -405,6 +408,6 @@ export class WorldScene extends Phaser.Scene {
     updatePlace(this);
     updateBoardEntry(this);
     this.hud.setPlayerOnMap(this.player.x / TILE, this.player.y / TILE);
-    this.touchPress = false;
+    this.touchPress = false; this.altPress = false;
   }
 }
