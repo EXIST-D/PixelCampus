@@ -540,7 +540,7 @@ export type ServerMsg =
   | { t: 'boss_end'; bid: string; result: 'win' | 'lose' | 'left'; msg: string; reward?: { coins: number; items?: { id: string; n: number }[] } }
   | { t: 'tp_result'; ok: boolean; msg: string }
   /** 我的宿舍：楼栋（没绑定 = 没有）、今天还能不能改楼栋、空调、宝箱；options = 能选的楼栋（按社区分组） */
-  | { t: 'dorm_data'; /** 门牌（房主起的名字，没起过就没有） */ title?: string; b?: string; canChange: boolean; ac: number; ch: Record<string, number>; /** 浴缸里养的鱼（只有房主收到） */ bt?: Record<string, number>; /** 浴缸概览（闪光用） */ bv?: BathView; /** 家具摆放（装修过才有；没有 = 默认布局） */ lay?: Placed[]; /** 1 = 不在资料卡上展示 */ hid?: boolean; /** 房间级别（1 中屋 / 2 大屋，没有 = 小屋）、墙纸地板（w、f 正在用的样式；ow、of 已拥有的样式，按位记） */ rm?: 1 | 2; sk?: { w?: number; f?: number; ow?: number; of?: number }; /** 我的宿舍收到的赞数 */ likes?: number; /** 养在宿舍的小猫编号 */ dc?: number[]; /** true = 刚做过一键还原、还能撤回 */ ru?: boolean; options: { group: string; names: string[] }[] }
+  | { t: 'dorm_data'; /** 门牌（房主起的名字，没起过就没有） */ title?: string; b?: string; canChange: boolean; ac: number; ch: Record<string, number>; /** 浴缸里养的鱼（只有房主收到） */ bt?: Record<string, number>; /** 浴缸概览（闪光用） */ bv?: BathView; /** 家具摆放（装修过才有；没有 = 默认布局） */ lay?: Placed[]; /** 1 = 不在资料卡上展示 */ hid?: boolean; /** 房间级别（1 中屋 / 2 大屋，没有 = 小屋）、墙纸地板（w、f 正在用的样式；ow、of 已拥有的样式，按位记） */ rm?: 1 | 2; sk?: { w?: number; f?: number; ow?: number; of?: number }; /** 我的宿舍收到的赞数 */ likes?: number; /** 养在宿舍的小猫编号 */ dc?: number[]; /** 最近送回校园的小猫编号（最新的在前，最多 3 只）：宿舍面板里一键接回 */ dr?: number[]; /** true = 刚做过一键还原、还能撤回 */ ru?: boolean; options: { group: string; names: string[] }[] }
   /** 可以进屋了（x、y = 我在宿舍楼门口的位置，像素）/ 宿舍操作的结果 */
   | { t: 'dorm_in'; x: number; y: number }
   /** 服务器把人从宿舍里带走了（传送、队友传送、被管理员传走…）：客户端要离开室内、留在新位置 */

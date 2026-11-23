@@ -1,6 +1,7 @@
 /* 宿舍面板：当前楼栋 + 回宿舍；宝箱两栏（背包 ⇄ 宝箱） */
 .dorm-cur { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 0 6px; }
 .dorm-b { font-weight: bold; font-size: 20px; }
+.dorm-cat-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 0; padding: 4px 6px; border: 2px solid var(--wood-l); border-radius: 2px; background: rgba(255,255,255,.35); } .dorm-cat-name { font-weight: bold; }
 .dorm-go { padding: 8px 18px; font-size: 18px; }
 .tp-btn.on { background: #ffe9a0; border-color: #8a5a2b; }
 .tp-btn:disabled { opacity: .45; cursor: default; }

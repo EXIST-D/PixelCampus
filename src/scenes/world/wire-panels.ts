@@ -59,14 +59,14 @@ import { questDef } from '@/shared/quests';
 import { sfx } from '@/audio/sfx';
 import { titleDef } from '@/shared/titles';
 import { ACH_TOTAL, achDef } from '@/shared/achievements';
-import { allCats } from '@/shared/cats';
+import { DORM_CAT_AT, allCats } from '@/shared/cats';
 import type { CatBridge, DormCatFx } from '@/systems/dormcats';
 import { itemDef } from '@/shared/items';
 import { seasonAt, weatherAt } from '@/shared/season';
 import { isNightAt } from '@/shared/clock';
 import { cycleHeld, doEmote, setupAudio, takePhoto } from './actions';
 import { changeZoom } from './camera';
-import { catAction, closeCat, refreshCatPanel } from './cats';
+import { catAction, closeCat, dormCatState, refreshCatPanel } from './cats';
 import { addDropped, clearDropped } from './entities';
 import { fishBlocked, fishLockState, onFishState } from './fishing';
 import { setupPlaceBtn } from './place';
@@ -188,6 +188,12 @@ export function wireWorld(sc: WorldScene) {
 
 export function wireDorm(sc: WorldScene) {
   sc.dormUi = new DormPanel(sc.net);
+  sc.dormUi.catInfo = (id) => { // 「刚送回校园的猫」一行要的资料：名字，以及现在能不能接回（不能就给原因）
+    const c = sc.cats[id]; if (!c) return null;
+    const st = dormCatState(sc, id, sc.catWith.get(id) === sc.net.selfId);
+    const why = st.inDorm ? '它已经住在宿舍里了' : (sc.catAff[id] ?? 0) < DORM_CAT_AT ? `好感还不到 ${DORM_CAT_AT}，接不回来` : st.why;
+    return { name: c.label, why };
+  };
   { const h = sc.net.handlers, pd = h.dormData, pr = h.dormResult; // 接回 / 送回宿舍后：小猫面板的按钮状态和结果文字也要跟着刷新
     h.dormData = (m) => { pd?.(m); refreshCatPanel(sc); };
     h.dormResult = (ok, msg, wake) => { pr?.(ok, msg, wake); if (sc.dormCatAwait) { sc.dormCatAwait = false; if (sc.catUi?.isOpen) sc.catUi.say(msg, ok); } };

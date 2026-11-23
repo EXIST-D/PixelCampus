@@ -70,6 +70,8 @@ export interface DormSave {
   sk?: { w?: number; f?: number; ow?: number; of?: number };
   /** 养在宿舍的小猫编号（好感度 ≥ 200 的才能接回来；上限按房间大小，还要摆有足够的「宿舍猫窝」）。只是我自己的状态：校园里这只猫对别的玩家照常在原地 */
   dc?: number[];
+  /** 最近「送回校园」的小猫编号（最新的在前，最多 DORM_CAT_RECENT 只）：不小心送回去了，在「宿舍」面板里一键接回；接回去 / 被挤出名单就从这里去掉 */
+  dr?: number[];
 }
 
 /** 宿舍房间的尺寸与门（和 data/interiors/dorm.json 一致，测试里核对）：服务器据此限定屋里的位置范围、给新进屋的人定出生点 */
@@ -129,6 +131,7 @@ export function cleanDorm(raw: unknown): DormSave | undefined {
     const lay = cleanLay(r.v === 2 ? r.lay : [...LEGACY_STARTERS, ...r.lay], out.rm ?? 0); if (lay) { out.lay = lay; out.v = 2; }
   }
   { const dc = cleanDormCats(r.dc, out.rm ?? 0); if (dc.length) out.dc = dc; }
+  { const dr = cleanRecentCats(r.dr, out.dc); if (dr.length) out.dr = dr; }
   { const lk = cleanLikes(r.lk); if (lk.length) out.lk = lk; }
   if (r.hid === 1) out.hid = 1;
   return Object.keys(out).length ? out : undefined;
@@ -139,6 +142,15 @@ export function cleanDormCats(raw: unknown, level: number = 0): number[] {
   if (!Array.isArray(raw)) return [];
   const out: number[] = [];
   for (const v of raw) { if (Number.isInteger(v) && (v as number) >= 0 && (v as number) < 1000 && !out.includes(v as number)) out.push(v as number); if (out.length >= dormCatCap(level)) break; }
+  return out;
+}
+/** 「刚送回校园的猫」名单最多记几只 */
+export const DORM_CAT_RECENT = 3;
+/** 从磁盘来的「最近送回校园的猫」：合法编号、去重、不超过上限；已经住在宿舍里的不算 */
+export function cleanRecentCats(raw: unknown, living: readonly number[] = []): number[] {
+  if (!Array.isArray(raw)) return [];
+  const out: number[] = [];
+  for (const v of raw) { if (Number.isInteger(v) && (v as number) >= 0 && (v as number) < 1000 && !out.includes(v as number) && !living.includes(v as number)) out.push(v as number); if (out.length >= DORM_CAT_RECENT) break; }
   return out;
 }
 /** 宿舍里摆着几个「宿舍猫窝」 */
@@ -153,7 +165,8 @@ export function dormCatApply(d: DormSave, op: 'adopt' | 'release', catId: number
   if (op === 'release') {
     if (at < 0) return { ok: false, msg: `${o.name}本来就在校园里` };
     d.dc = cur.filter((i) => i !== catId); if (!d.dc.length) delete d.dc;
-    return { ok: true, msg: `${o.name}回校园了（在原来的地方等你）` };
+    d.dr = [catId, ...(d.dr ?? []).filter((i) => i !== catId)].slice(0, DORM_CAT_RECENT); // 记下来：不小心送回去了，还能在「宿舍」面板里一键接回
+    return { ok: true, msg: `${o.name}回校园了（在它原来的家等你）。送错了？打开「宿舍」面板，在「刚送回校园的猫」里一键接回` };
   }
   if (at >= 0) return { ok: false, msg: `${o.name}已经住在你的宿舍里了` };
   if (o.aff < DORM_CAT_AT) return { ok: false, msg: `要和${o.name}成为「${LEVEL_NAMES[DORM_CAT_LEVEL]}」（好感 ${DORM_CAT_AT} 点）才能接它回宿舍` };
@@ -163,6 +176,7 @@ export function dormCatApply(d: DormSave, op: 'adopt' | 'release', catId: number
   if (cur.length >= cap) return { ok: false, msg: `这间宿舍最多养 ${cap} 只猫（扩建后能养更多）` };
   if (catBedsOf(d) <= cur.length) return { ok: false, msg: `宿舍里要先摆一个空着的「宿舍猫窝」（现在有 ${catBedsOf(d)} 个，已经住了 ${cur.length} 只）：商店买，装修里摆进去` };
   d.dc = [...cur, catId];
+  if (d.dr) { d.dr = d.dr.filter((i) => i !== catId); if (!d.dr.length) delete d.dr; }
   return { ok: true, msg: `${o.name}搬进你的宿舍啦！回宿舍就能看到它睡在猫窝里` };
 }
 

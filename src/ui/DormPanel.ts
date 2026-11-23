@@ -27,6 +27,8 @@ export class DormPanel {
   private signInput = el('input');
   private ask = el('div', 'mon-enc hand-prompt hidden'); private askTimer = 0;
   private msg = el('div', 'tp-msg');
+  /** 「刚送回校园的猫」每一行要的资料（场景接线时设置）：名字，以及现在不能接回的原因（能接回就没有 why） */
+  catInfo: ((id: number) => { name: string; why?: string } | null) | null = null;
   private chestMsg = el('div', 'tp-msg');
   private body = el('div');
   private chestBody = el('div');
@@ -152,6 +154,18 @@ export class DormPanel {
     b.append(cur, el('div', 'create-sub', d.b
       ? `空调：${AC_NAMES[d.ac] ?? '关'}。从宿舍出来，就站在${d.b}的门口。在${d.b}门口按 E 也能进屋。`
       : '选你住的社区和楼栋：以后点「回宿舍」就回家，在这栋楼的门口按 E 也能进屋。第一次选可以随便选。'));
+    if (d.dr?.length) { // 不小心把猫送回校园了：一键接回，不用去校园里找它
+      b.append(el('div', 'tp-group', '🐱 刚送回校园的猫'), el('div', 'create-sub', '送错了？点「接回宿舍」就行，不用去校园里找它。'));
+      for (const id of d.dr) {
+        const info = this.catInfo?.(id) ?? { name: `小猫 #${id}` };
+        const row = el('div', 'dorm-cat-row'), col = el('div'), btn = el('button', 'btn primary', '接回宿舍'); btn.type = 'button';
+        col.append(el('div', 'dorm-cat-name', `🐾 ${info.name}`));
+        if (info.why) col.append(el('div', 'create-sub', info.why));
+        btn.disabled = !!info.why; if (info.why) btn.title = info.why;
+        btn.addEventListener('click', () => { if (this.net.status !== 'online') { this.say('没连上服务器', false); return; } this.say('', true); this.net.dormCat(id, true); });
+        row.append(col, btn); b.append(row);
+      }
+    }
     if (d.b && !d.canChange) b.append(el('div', 'tp-msg bad', '今天已经改过楼栋了，明天再来吧（每天只能改一次；改楼栋不影响屋里的东西）。'));
     if (d.b) { // 资料卡展示与赞数
       const pub = el('label', 'dorm-pub'), cb = el('input'); cb.type = 'checkbox'; cb.checked = !d.hid;
