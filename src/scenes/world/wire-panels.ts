@@ -138,7 +138,7 @@ export function wireHand(sc: WorldScene) {
   sc.pvpUi.onOpen = () => { sc.battleUi.close(); closeCat(sc); };
   sc.bossUi = new BossUi(sc.net);
   sc.bossUi.onOpen = () => { sc.battleUi.close(); sc.pvpUi.close(); closeCat(sc); };
-  sc.socialUi.onPvp = (uid) => sc.net.pvpInvite(uid);
+  sc.socialUi.onPvp = (uid) => sc.pvpUi.invite(uid);
   sc.handUi = new HandUi(sc.net);
   sc.handUi.onNote = (title, text) => { sc.hud.banner(title, text); sc.net.system(`${title}：${text}`); };
   sc.handUi.onRole = (role, pid, side) => { const was = sc.holdPid; sc.holdPid = role === 'follow' ? pid : 0; sc.holdSide = side; sc.player.led = role === 'follow'; if (role !== 'none' && !(was && was === sc.holdPid)) sfx('pickup'); };

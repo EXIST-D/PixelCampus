@@ -531,6 +531,8 @@ export type ServerMsg =
   | { t: 'pvp_invite'; uid: number; name: string; ms: number }
   | { t: 'pvp_state'; bid: string; turn: number; phase: 'choose' | 'over'; me: PvpSideView; foe: PvpSideView; ev: BEvent[]; result?: { winner: 'a' | 'b' | 'none'; reason: 'win' | 'lose' | 'fled' | 'timeout' } }
   | { t: 'pvp_end'; bid: string; result: 'win' | 'lose' | 'fled' | 'timeout'; msg: string }
+  /** 对战邀请的结果 / 不能对战的原因（屏幕上要看得见）；end = 这条邀请已经有结果，客户端收起「等待回应」条 */
+  | { t: 'pvp_note'; ok: boolean; msg: string; end?: boolean }
   /** 世界 BOSS：邀请 / 战斗状态 / 结束 */
   | { t: 'boss_invite'; uid: number; name: string; ms: number }
   /** ready = 这一回合已提交；ev 里的玩家事件带 uid（谁被打中 / 谁出的招） */

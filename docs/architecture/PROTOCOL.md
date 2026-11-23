@@ -1,7 +1,7 @@
 <!-- 本文件由 npm run protocol:doc 根据 src/shared/protocol.ts 生成，不要手改（改了协议后重新生成） -->
 # 联机协议索引
 
-> 共 167 种客户端消息、134 种服务器消息（另有位置上报 / 快照两种二进制帧，见 protocol.ts 的 encodePos / decodeSnapshot）。
+> 共 167 种客户端消息、135 种服务器消息（另有位置上报 / 快照两种二进制帧，见 protocol.ts 的 encodePos / decodeSnapshot）。
 > 字段定义以 [`src/shared/protocol.ts`](../../src/shared/protocol.ts) 为准；规则细节在 `src/shared/` 对应文件；每批功能的设计背景见 [MULTIPLAYER.md](../design/MULTIPLAYER.md) 与 [CHANGELOG.md](../CHANGELOG.md)。
 > 新增消息：在 protocol.ts 的联合类型里加一行并写注释 → `npm run protocol:doc` → 服务端在对应 handler 里登记。
 
@@ -232,7 +232,7 @@
 |---|---|---|
 | `hall_get` | → 服务器 | — |
 
-## 其他（34）
+## 其他（35）
 
 | 消息 | 方向 | 说明 |
 |---|---|---|
@@ -264,6 +264,7 @@
 | `pvp_invite` | → 客户端 | PvP：收到邀请 / 战斗状态 / 结束 |
 | `pvp_state` | → 客户端 | — |
 | `pvp_end` | → 客户端 | — |
+| `pvp_note` | → 客户端 | 对战邀请的结果 / 不能对战的原因（屏幕上要看得见）；end = 这条邀请已经有结果，客户端收起「等待回应」条 |
 | `boss_invite` | → 客户端 | 世界 BOSS：邀请 / 战斗状态 / 结束 |
 | `boss_state` | → 客户端 | ready = 这一回合已提交；ev 里的玩家事件带 uid（谁被打中 / 谁出的招） |
 | `boss_end` | → 客户端 | — |

@@ -80,6 +80,10 @@
 .bt-sum-row { opacity: .9; }
 .mon-enc-timer { height: 4px; margin-top: 4px; background: var(--wood); transform-origin: left; animation: mon-enc-shrink linear forwards; }
 @keyframes mon-enc-shrink { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+/* 对战邀请弹窗 / 邀请方状态条：放在野生遭遇提示（top 130px）的下面，两个同时出现也不会叠在一起 */
+.mon-enc.pvp-top { top: 215px; }
+.pvp-wait .pvp-wait-ico { margin-right: 8px; } .pvp-wait.bad { border-color: #a33; }
+@media (max-width: 560px) { .mon-enc.pvp-top { top: 205px; } }
 @media (max-width: 560px) { .bt-stage { height: 240px; } .bt-img.foe { width: 96px; height: 96px; } .bt-img.me { width: 128px; height: 128px; } .bt-card { min-width: 150px; font-size: 13px; } .mon-enc { top: 120px; } }
 
 /* ---- 老吴对战横幅、进化 ---- */

@@ -6,6 +6,9 @@ import { learnLogText, moveView, stageBadges, stageLog, hpText } from './monBatt
 import { elementName, maxHp, type Mon, type StatusKind } from '@/shared/mons';
 import { sfx } from '@/audio/sfx';
 
+/** 邀请有效期（和服务器 server/pvp.ts 的 PVP.INVITE_MS 一致）：等待条的倒计时用 */
+const PVP_WAIT_MS = 30000;
+
 type PvpInvite = Extract<ServerMsg, { t: 'pvp_invite' }>;
 type PvpState = Extract<ServerMsg, { t: 'pvp_state' }>;
 type PvpEnd = Extract<ServerMsg, { t: 'pvp_end' }>;
@@ -28,7 +31,10 @@ const bar = (frac: number) => { const b = el('div', 'mon-bar hp'), f = el('div',
  */
 export class PvpUi {
   private root = el('div', 'screen battle hidden');
-  private prompt = el('div', 'mon-enc hidden');
+  private prompt = el('div', 'mon-enc pvp-top hidden');
+  /** 邀请方的状态条：「已发出邀请，等 TA 回应」→ 被拒 / 超时 / 不能对战的原因（以前这些只发到精灵面板里，邀请方屏幕上什么都看不到） */
+  private wait = el('div', 'mon-enc pvp-top pvp-wait hidden');
+  private waitTimer = 0;
   private foeCard = el('div', 'bt-card foe');
   private meCard = el('div', 'bt-card me');
   private foeImg = el('img', 'bt-img foe');
@@ -50,9 +56,10 @@ export class PvpUi {
     const stage = el('div', 'bt-stage'); stage.append(this.foeCard, this.foeImg, this.meImg, this.meCard);
     const panel = el('div', 'box bt'); panel.append(stage, this.log, this.menu);
     this.root.append(panel);
-    (document.getElementById('hud') ?? document.body).append(this.root, this.prompt);
+    (document.getElementById('hud') ?? document.body).append(this.root, this.prompt, this.wait);
     for (const i of [this.foeImg, this.meImg]) { i.draggable = false; i.alt = ''; }
     net.handlers.pvpInvite = (m) => this.onInvite(m);
+    net.handlers.pvpNote = (m) => this.onNote(m);
     net.handlers.pvpState = (m) => void this.onState(m);
     net.handlers.pvpEnd = (m) => this.onEnd(m);
   }
@@ -60,6 +67,33 @@ export class PvpUi {
   get isOpen() { return !this.root.classList.contains('hidden'); }
 
   // ------------------------------------------------------------ 邀请
+  /** 点「对战」：发邀请；发不出去 / 已经在对战就当场说明原因 */
+  invite(uid: number) {
+    if (this.net.status !== 'online') { this.showNote(false, '要连上服务器才能对战（单机模式没有玩家对战）', 4000); return; }
+    if (this.isOpen) { this.showNote(false, '你正在对战中', 3000); return; }
+    this.net.pvpInvite(uid);
+    this.showNote(true, '正在发出对战邀请……', 0); // 服务器的回话一到就换成正式的提示；5 秒没回应也要说一声
+    window.clearTimeout(this.waitTimer);
+    this.waitTimer = window.setTimeout(() => this.showNote(false, '没有收到服务器的回应，请稍后再试', 4000), 5000);
+  }
+  private onNote(m: { ok: boolean; msg: string; end?: boolean }) {
+    window.clearTimeout(this.waitTimer);
+    if (m.ok && m.end !== false) { this.hideNote(); return; } // 对战开始了：战斗界面会接手
+    this.showNote(m.ok, m.msg, m.ok ? 0 : 6000, m.ok ? PVP_WAIT_MS : 0);
+    if (!m.ok) sfx('notify');
+  }
+  /** ms = 多久后自动收起（0 = 一直留着，等下一条）；timerMs = 画一根倒计时条 */
+  private showNote(ok: boolean, text: string, ms: number, timerMs = 0) {
+    window.clearTimeout(this.waitTimer);
+    const t = el('div', 'mon-sub', text);
+    this.wait.replaceChildren(el('div', 'mon-enc-row', ''));
+    (this.wait.firstChild as HTMLElement).append(el('span', 'pvp-wait-ico', ok ? '⚔️' : '⚠️'), t);
+    if (timerMs > 0) { const bar = el('div', 'mon-enc-timer'); bar.style.animationDuration = `${timerMs}ms`; this.wait.append(bar); }
+    this.wait.classList.toggle('bad', !ok); this.wait.classList.remove('hidden');
+    if (ms > 0) this.waitTimer = window.setTimeout(() => this.hideNote(), ms);
+  }
+  private hideNote() { window.clearTimeout(this.waitTimer); this.wait.classList.add('hidden'); }
+
   private onInvite(m: PvpInvite) {
     sfx('notify');
     this.prompt.replaceChildren();
@@ -79,6 +113,7 @@ export class PvpUi {
     const fresh = !this.st || this.st.bid !== m.bid;
     if (fresh) {
       this.st = m; this.busy = false; this.submitted = false; this.mode = 'main';
+      this.hideNote(); this.hidePrompt();
       this.root.classList.remove('hidden'); this.onOpen?.();
       this.log.replaceChildren();
       this.say(`和 ${m.foe.name} 的对战开始了！`);

@@ -110,6 +110,7 @@ export interface NetHandlers {
   pvpInvite?: (m: Extract<ServerMsg, { t: 'pvp_invite' }>) => void;
   pvpState?: (m: Extract<ServerMsg, { t: 'pvp_state' }>) => void;
   pvpEnd?: (m: Extract<ServerMsg, { t: 'pvp_end' }>) => void;
+  pvpNote?: (m: Extract<ServerMsg, { t: 'pvp_note' }>) => void;
   bossInvite?: (m: Extract<ServerMsg, { t: 'boss_invite' }>) => void;
   bossState?: (m: Extract<ServerMsg, { t: 'boss_state' }>) => void;
   bossEnd?: (m: Extract<ServerMsg, { t: 'boss_end' }>) => void;
@@ -348,6 +349,7 @@ export class NetClient implements ChatTransport {
       case 'pvp_invite': this.handlers.pvpInvite?.(m); break;
       case 'pvp_state': this.handlers.pvpState?.(m); break;
       case 'pvp_end': this.handlers.pvpEnd?.(m); break;
+      case 'pvp_note': this.handlers.pvpNote?.(m); break;
       case 'boss_invite': this.handlers.bossInvite?.(m); break;
       case 'boss_state': this.handlers.bossState?.(m); break;
       case 'boss_end': this.handlers.bossEnd?.(m); break;
