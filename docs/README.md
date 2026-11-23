@@ -94,6 +94,7 @@ docs/
 | [feature/20261115-boss-pve/](feature/20261115-boss-pve/spec.md) | 组队 PVE 世界 BOSS「精工湖·青鳞」+ 传送面板 NPC 挑战入口（协作者开发客户端与共享规则，服务端由维护者补齐，已上线） |
 | [feature/20261117-domain-migration/](feature/20261117-domain-migration/spec.md) | 老域名 → 备案新域名 huepixel.top 的玩家一键搬家（一次性搬家券；已确认，已上线） |
 | [feature/20261117-wild-ai/](feature/20261117-wild-ai/spec.md) | 野生 / 校园猫对战 AI：按克制与血量选招、难度分档、纯共享规则不改协议（Issue #11，开发中） |
+| [feature/20261123-pvp-notes-cat-readopt/](feature/20261123-pvp-notes-cat-readopt/spec.md) | 对战邀请提示与状态检查 + 猫咪送回校园后一键接回宿舍（开发中） |
 - 每个新功能复制成 `docs/feature/<YYYYMMDD-功能名>/spec.md` + `plan.md`；**先 spec、主人确认，再 plan、主人确认，再写代码**。
 - 2026-11-10 起 spec 和 plan **都进公开仓库**：不要写服务器地址、口令、玩家数据（运维细节写到私有文档）。
 
